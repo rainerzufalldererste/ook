@@ -674,7 +674,7 @@ size_t find_lowest(state *pState, size_t *pSubIndex)
   return index;
 }
 
-bool recursive_guess(state *pState)
+bool recursive_guess(state *pState, size_t *pGuesses, size_t *pTotalGuesses)
 {
   if (pState->blocks == 0b111111111)
     return true;
@@ -702,8 +702,11 @@ bool recursive_guess(state *pState)
     s.x[tripleIndex] &= ((~(s_all << subIndex)) | (1 << (offset + subIndex)));
     s.x[tripleIndex] |= (s_done << (subIndex));
     
-    if (checked_solve(&s) && recursive_guess(&s))
+    (*pTotalGuesses)++;
+
+    if (checked_solve(&s) && recursive_guess(&s, pGuesses, pTotalGuesses))
     {
+      (*pGuesses)++;
       *pState = s;
       return true;
     }
@@ -766,10 +769,13 @@ int32_t main(const int32_t argc, char **ppArgv)
     fputs("Guessing...", stdout);
 
     const uint64_t before = _get_ticks();
-    ERROR_IF(!recursive_guess(&s), "Failed to solve by guessing.");
+    
+    size_t guesses = 0, total = 0;
+    ERROR_IF(!recursive_guess(&s, &guesses, &total), "Failed to solve by guessing.");
+    
     const uint64_t after = _get_ticks();
 
-    printf(" (Completed in %9.6f ms)\n", (after - before) * 1e-6f);
+    printf(" (Completed in %9.6f ms | %" PRIu64 " consecutive guesses needed | %" PRIu64 " total)\n", (after - before) * 1e-6f, guesses, total);
 
     print_state(&s);
   }
