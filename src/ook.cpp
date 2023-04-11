@@ -392,8 +392,13 @@ bool check_hlines(state *pState)
   constexpr uint32_t m1 = s_all << 10;
   constexpr uint32_t m2 = s_all << 20;
 
-  for (size_t l = 0; l < 9; l++)
+  size_t bit = 1;
+
+  for (size_t l = 0; l < 9; l++, bit <<= 1)
   {
+    if (pState->lineH & bit)
+      continue;
+
     uint32_t found = 0;
 
     for (size_t hb = 0; hb < 3; hb++)
@@ -479,10 +484,15 @@ bool check_blocks(state *pState)
   constexpr uint32_t m1 = s_all << 10;
   constexpr uint32_t m2 = s_all << 20;
 
+  size_t bit = 1;
+
   for (size_t vb = 0; vb < 3; vb++)
   {
-    for (size_t hb = 0; hb < 3; hb++)
+    for (size_t hb = 0; hb < 3; hb++, bit <<= 1)
     {
+      if (pState->blocks & bit)
+        continue;
+
       uint32_t found = 0;
 
       for (size_t vt = 0; vt < 3; vt++)
@@ -777,7 +787,7 @@ int32_t main(const int32_t argc, char **ppArgv)
 
     printf(" (Completed in %9.6f ms | %" PRIu64 " consecutive guesses needed | %" PRIu64 " total)\n", (after - before) * 1e-6f, guesses, total);
 
-    print_state(&s);
+    print(&s);
   }
 
   return EXIT_SUCCESS;
