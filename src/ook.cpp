@@ -290,25 +290,41 @@ bool solve_vlines(state *pState)
 
   for (size_t hb = 0; hb < 3; hb++)
   {
-    uint32_t singleBits = 0;
+    uint32_t doneMask = 0;
+    uint32_t atLeastOnce = 0;
+    uint32_t moreThanOnce = 0;
 
     for (size_t l = 0; l < 9; l++)
     {
       const uint32_t triple = pState->x[l * 3 + hb];
       const uint32_t mask = (triple & (s_done | (s_done << 10) | (s_done << 20))) * s_all;
 
-      singleBits |= (triple & mask);
+      doneMask |= (triple & mask);
+      moreThanOnce |= (atLeastOnce & triple);
+      atLeastOnce |= triple;
     }
+
+    const uint32_t exactlyOnce = (atLeastOnce & ~moreThanOnce) & ~(s_done | (s_done << 10) | (s_done << 20));
 
     for (size_t l = 0; l < 9; l++)
     {
       const uint32_t triple = pState->x[l * 3 + hb];
-      const uint32_t mask = ((~triple) & (s_done | (s_done << 10) | (s_done << 20))) * s_all;
-      const uint32_t _new = triple & ~(mask & singleBits);
-      
-      changed |= (_new != triple);
 
-      pState->x[l * 3 + hb] = _new;
+      // Remove values that already occur in this line.
+      const uint32_t mask0 = ((~triple) & (s_done | (s_done << 10) | (s_done << 20))) * s_all;
+      const uint32_t new0 = triple & ~(mask0 & doneMask);
+
+      // Select values that only occur once in this line.
+      const uint32_t once = triple & exactlyOnce;
+      const uint32_t _0 = !(once & s_all) * s_all;
+      const uint32_t _1 = !(once & (s_all << 10)) * (s_all << 10);
+      const uint32_t _2 = !(once & (s_all << 20)) * (s_all << 20);
+      const uint32_t mask1 = ((once | _0) | (_1 | _2)) | (s_done | (s_done << 10) | (s_done << 20));
+      const uint32_t new1 = new0 & mask1;
+
+      changed |= (new1 != triple);
+
+      pState->x[l * 3 + hb] = new1;
     }
   }
 
@@ -340,7 +356,7 @@ bool check_vlines(state *pState)
 bool solve_hlines(state *pState)
 {
   bool changed = false;
-  
+
   uint16_t bit = 1;
 
   for (size_t l = 0; l < 9; l++, bit <<= 1)
@@ -348,39 +364,63 @@ bool solve_hlines(state *pState)
     if (pState->lineH & bit)
       continue;
 
-    uint32_t singleBits = 0;
+    uint32_t doneMask = 0;
+    uint32_t atLeastOnce = 0;
+    uint32_t moreThanOnce = 0;
 
     for (size_t hb = 0; hb < 3; hb++)
     {
       const uint32_t triple = pState->x[l * 3 + hb];
       const uint32_t mask = (triple & (s_done | (s_done << 10) | (s_done << 20))) * s_all;
 
-      singleBits |= (triple & mask);
+      doneMask |= (triple & mask);
+      moreThanOnce |= (atLeastOnce & triple);
+      atLeastOnce |= triple;
     }
 
     // Not sure which option is faster, but the second one feels smarter.
     // Option A:
-    //singleBits |= ((singleBits >> 10) | (singleBits >> 20));
-    // const uint32_t foundMask = singleBits | (singleBits << 10) | (singleBits << 20);
+    // doneMask |= ((doneMask >> 10) | (doneMask >> 20));
+    // const uint32_t foundMask = doneMask | (doneMask << 10) | (doneMask << 20);
 
     // Option B:
-    const uint32_t b1 = (singleBits >> 10) & s_all;
-    const uint32_t b2 = (singleBits >> 20) & s_all;
-    singleBits = ((singleBits & s_all) | b1 | b2);
-    const uint32_t foundMask = singleBits * (1 | (1 << 10) | (1 << 20));
+    const uint32_t b1 = (doneMask >> 10) & s_all;
+    const uint32_t b2 = (doneMask >> 20) & s_all;
+    doneMask = ((doneMask & s_all) | b1 | b2);
+    const uint32_t foundMask = doneMask * (1 | (1 << 10) | (1 << 20));
+
+    const uint32_t t1 = (atLeastOnce >> 10);
+    const uint32_t t2 = (atLeastOnce >> 20);
+    moreThanOnce |= (atLeastOnce & t1) | (moreThanOnce >> 10);
+    atLeastOnce |= t1;
+    moreThanOnce |= (atLeastOnce & t2) | (moreThanOnce >> 20);
+    atLeastOnce |= t2;
+    atLeastOnce &= s_all;
+
+    const uint32_t exactlyOnce = (atLeastOnce & ~moreThanOnce) * (1 | (1 << 10) | (1 << 20));
 
     for (size_t hb = 0; hb < 3; hb++)
     {
       const uint32_t triple = pState->x[l * 3 + hb];
-      const uint32_t mask = ((~triple) & (s_done | (s_done << 10) | (s_done << 20))) * s_all;
-      const uint32_t _new = (triple & ~(mask & foundMask));
 
-      changed |= (_new != triple);
+      // Remove values that already occur in this line.
+      const uint32_t mask0 = ((~triple) & (s_done | (s_done << 10) | (s_done << 20))) * s_all;
+      const uint32_t new0 = (triple & ~(mask0 & foundMask));
 
-      pState->x[l * 3 + hb] = _new;
+      // Select values that only occur once in this line.
+      const uint32_t once = triple & exactlyOnce;
+      const uint32_t _0 = !(once & s_all) * s_all;
+      const uint32_t _1 = !(once & (s_all << 10)) * (s_all << 10);
+      const uint32_t _2 = !(once & (s_all << 20)) * (s_all << 20);
+      const uint32_t mask1 = ((once | _0) | (_1 | _2)) | (s_done | (s_done << 10) | (s_done << 20));
+      const uint32_t new1 = new0 & mask1;
+
+      changed |= (new1 != triple);
+
+      pState->x[l * 3 + hb] = new1;
     }
 
-    pState->lineH |= ((!!(singleBits == s_all)) << l);
+    pState->lineH |= ((!!(doneMask == s_all)) << l);
   }
 
   return changed;
@@ -439,39 +479,63 @@ bool solve_blocks(state *pState)
       if (pState->blocks & bit)
         continue;
 
-      uint32_t singleBits = 0;
+      uint32_t doneMask = 0;
+      uint32_t atLeastOnce = 0;
+      uint32_t moreThanOnce = 0;
 
       for (size_t vt = 0; vt < 3; vt++)
       {
         const uint32_t triple = pState->x[vb * 9 + hb + vt * 3];
         const uint32_t mask = (triple & (s_done | (s_done << 10) | (s_done << 20))) * s_all;
 
-        singleBits |= (triple & mask);
+        doneMask |= (triple & mask);
+        moreThanOnce |= (atLeastOnce & triple);
+        atLeastOnce |= triple;
       }
 
       // Not sure which option is faster, but the second one feels smarter.
       // Option A:
-      //singleBits |= ((singleBits >> 10) | (singleBits >> 20));
-      // const uint32_t foundMask = singleBits | (singleBits << 10) | (singleBits << 20);
+      // doneMask |= ((doneMask >> 10) | (doneMask >> 20));
+      // const uint32_t foundMask = doneMask | (doneMask << 10) | (doneMask << 20);
 
       // Option B:
-      const uint32_t b1 = (singleBits >> 10) & s_all;
-      const uint32_t b2 = (singleBits >> 20) & s_all;
-      singleBits = ((singleBits & s_all) | b1 | b2);
-      const uint32_t foundMask = singleBits * (1 | (1 << 10) | (1 << 20));
+      const uint32_t b1 = (doneMask >> 10) & s_all;
+      const uint32_t b2 = (doneMask >> 20) & s_all;
+      doneMask = ((doneMask & s_all) | b1 | b2);
+      const uint32_t foundMask = doneMask * (1 | (1 << 10) | (1 << 20));
+
+      const uint32_t t1 = (atLeastOnce >> 10);
+      const uint32_t t2 = (atLeastOnce >> 20);
+      moreThanOnce |= (atLeastOnce & t1) | (moreThanOnce >> 10);
+      atLeastOnce |= t1;
+      moreThanOnce |= (atLeastOnce & t2) | (moreThanOnce >> 20);
+      atLeastOnce |= t2;
+      atLeastOnce &= s_all;
+
+      const uint32_t exactlyOnce = (atLeastOnce & ~moreThanOnce) * (1 | (1 << 10) | (1 << 20));
 
       for (size_t vt = 0; vt < 3; vt++)
       {
         const uint32_t triple = pState->x[vb * 9 + hb + vt * 3];
-        const uint32_t mask = ((~triple) & (s_done | (s_done << 10) | (s_done << 20))) * s_all;
-        const uint32_t _new = (triple & ~(mask & foundMask));
 
-        changed |= (_new != triple);
+        // Remove values that already occur in this block.
+        const uint32_t mask0 = ((~triple) & (s_done | (s_done << 10) | (s_done << 20))) * s_all;
+        const uint32_t new0 = (triple & ~(mask0 & foundMask));
 
-        pState->x[vb * 9 + hb + vt * 3] = _new;
+        // Select values that only occur once in this block.
+        const uint32_t once = triple & exactlyOnce;
+        const uint32_t _0 = !(once & s_all) * s_all;
+        const uint32_t _1 = !(once & (s_all << 10)) * (s_all << 10);
+        const uint32_t _2 = !(once & (s_all << 20)) * (s_all << 20);
+        const uint32_t mask1 = ((once | _0) | (_1 | _2)) | (s_done | (s_done << 10) | (s_done << 20));
+        const uint32_t new1 = new0 & mask1;
+
+        changed |= (new1 != triple);
+
+        pState->x[vb * 9 + hb + vt * 3] = new1;
       }
 
-      pState->blocks |= ((!!(singleBits == s_all)) << blockIndex);
+      pState->blocks |= ((!!(doneMask == s_all)) << blockIndex);
     }
   }
 
@@ -573,7 +637,7 @@ void simple_solve(state *pState)
       recalc_done(pState);
       found = true;
     }
-
+    
     if (solve_blocks(pState))
     {
       recalc_done(pState);
@@ -777,16 +841,16 @@ int32_t main(const int32_t argc, char **ppArgv)
   if (s.blocks != 0b111111111)
   {
     fputs("Guessing...", stdout);
-
+  
     const uint64_t before = _get_ticks();
     
     size_t guesses = 0, total = 0;
     ERROR_IF(!recursive_guess(&s, &guesses, &total), "Failed to solve by guessing.");
     
     const uint64_t after = _get_ticks();
-
+  
     printf(" (Completed in %9.6f ms | %" PRIu64 " consecutive guesses needed | %" PRIu64 " total)\n", (after - before) * 1e-6f, guesses, total);
-
+  
     print(&s);
   }
 
