@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <inttypes.h>
+#include <math.h>
 
 #include <Windows.h>
 
@@ -796,9 +797,11 @@ bool recursive_guess(state *pState, size_t *pGuesses, size_t *pTotalGuesses)
   return false;
 }
 
+static const char _Arg_Benchmark[] = "--bench";
+
 int32_t main(const int32_t argc, char **ppArgv)
 {
-  ERROR_IF(argc <= 1, "Usage: ook <filename>");
+  ERROR_IF(argc <= 1, "Usage: ook <filename> [--bench]");
 
   state s;
   init(&s);
@@ -819,39 +822,127 @@ int32_t main(const int32_t argc, char **ppArgv)
 
   print(&s);
 
-  // Simple Solve.
+  if (argc > 2 && strncmp(ppArgv[2], _Arg_Benchmark, sizeof(_Arg_Benchmark)) == 0)
   {
-    fputs("Simple Solve...", stdout);
+    // Dry Run.
+    {
+      puts("Dry Run...");
 
-    const uint64_t before = _get_ticks();
-    simple_solve(&s);
-    const uint64_t after = _get_ticks();
+      state s1 = s;
+      simple_solve(&s1);
 
-    printf(" (Completed in %9.6f ms)\n", (after - before) * 1e-6f);
+      if (s1.blocks != 0b111111111)
+      {
+        size_t _0, _1;
+        recursive_guess(&s1, &_0, &_1);
+      }
+    }
 
-    print_state(&s);
+    puts("Benchmarking...");
+
+    size_t sampleCount = 0;
+    size_t *pNsSamples = nullptr;
+    size_t *pOpSamples = nullptr;
+    size_t totalTicks = 0;
+    size_t totalOps = 0;
+    double meanNs = 0;
+    double meanOps = 0;
+
+    const uint64_t ticksStart = _get_ticks();
+
+    while (_ticks_to_ns(_get_ticks() - ticksStart) < 5000000000ULL)
+    {
+      const uint64_t before = _get_ticks();
+      const uint64_t beforeEvents = __rdtsc();
+
+      for (size_t i = 0; i < 1000; i++)
+      {
+        state s1 = s;
+        simple_solve(&s1);
+
+        if (s1.blocks != 0b111111111)
+        {
+          size_t _0, _1;
+          recursive_guess(&s1, &_0, &_1);
+        }
+      }
+
+      const uint64_t afterEvents = __rdtsc();
+      const uint64_t after = _get_ticks();
+
+      const size_t sampleIndex = sampleCount;
+      sampleCount++;
+
+      pNsSamples = reinterpret_cast<size_t *>(realloc(pNsSamples, sizeof(size_t) * sampleCount));
+      ERROR_IF(pNsSamples == nullptr, "Failed to allocate memory.");
+
+      pOpSamples = reinterpret_cast<size_t *>(realloc(pOpSamples, sizeof(size_t) * sampleCount));
+      ERROR_IF(pOpSamples == nullptr, "Failed to allocate memory.");
+
+      pNsSamples[sampleIndex] = _ticks_to_ns(after - before);
+      pOpSamples[sampleIndex] = afterEvents - beforeEvents;
+      
+      totalTicks += after - before;
+      totalOps += afterEvents - beforeEvents;
+
+      meanNs = _ticks_to_ns(totalTicks) / (double)sampleCount;
+      meanOps = totalOps / (double)sampleCount;
+      
+      printf("\r%7.5f ms (%5.3fM Ops) / 1k solves", meanNs * 1e-6, meanOps * 1e-6);
+    }
+
+    double sigmaNs = 0;
+    double sigmaOps = 0;
+
+    for (size_t i = 0; i < sampleCount; i++)
+    {
+      const double diffNs = pNsSamples[i] - meanNs;
+      const double diffOps = pOpSamples[i] - meanOps;
+      sigmaNs += diffNs * diffNs;
+      sigmaOps += diffOps * diffOps;
+    }
+
+    sigmaNs = sqrt(sigmaNs / sampleCount);
+    sigmaOps = sqrt(sigmaOps / sampleCount);
+    
+    printf(" (std dev: %7.5f ms | %5.3fM Ops | %" PRIu64 " samples)\n", sigmaNs * 1e-6, sigmaOps * 1e-6, sampleCount);
   }
-
-  ERROR_IF(!check(&s), "No solutions found. (No Valid Options)");
-  ERROR_IF(!check_blocks(&s), "No solutions found. (Invalid Block)");
-  ERROR_IF(!check_vlines(&s), "No solutions found. (Invalid Vertical Line)");
-  ERROR_IF(!check_hlines(&s), "No solutions found. (Invalid Horizontal Line)");
-
-  // Recursively Guess.
-  if (s.blocks != 0b111111111)
+  else
   {
-    fputs("Guessing...", stdout);
-  
-    const uint64_t before = _get_ticks();
-    
-    size_t guesses = 0, total = 0;
-    ERROR_IF(!recursive_guess(&s, &guesses, &total), "Failed to solve by guessing.");
-    
-    const uint64_t after = _get_ticks();
-  
-    printf(" (Completed in %9.6f ms | %" PRIu64 " consecutive guesses needed | %" PRIu64 " total)\n", (after - before) * 1e-6f, guesses, total);
-  
-    print(&s);
+    // Simple Solve.
+    {
+      fputs("Simple Solve...", stdout);
+
+      const uint64_t before = _get_ticks();
+      simple_solve(&s);
+      const uint64_t after = _get_ticks();
+
+      printf(" (Completed in %9.6f ms)\n", _ticks_to_ns(after - before) * 1e-6f);
+
+      print_state(&s);
+    }
+
+    ERROR_IF(!check(&s), "No solutions found. (No Valid Options)");
+    ERROR_IF(!check_blocks(&s), "No solutions found. (Invalid Block)");
+    ERROR_IF(!check_vlines(&s), "No solutions found. (Invalid Vertical Line)");
+    ERROR_IF(!check_hlines(&s), "No solutions found. (Invalid Horizontal Line)");
+
+    // Recursively Guess.
+    if (s.blocks != 0b111111111)
+    {
+      fputs("Guessing...", stdout);
+
+      const uint64_t before = _get_ticks();
+
+      size_t guesses = 0, total = 0;
+      ERROR_IF(!recursive_guess(&s, &guesses, &total), "Failed to solve by guessing.");
+
+      const uint64_t after = _get_ticks();
+
+      printf(" (Completed in %9.6f ms | %" PRIu64 " consecutive guesses needed | %" PRIu64 " total)\n", _ticks_to_ns(after - before) * 1e-6f, guesses, total);
+
+      print(&s);
+    }
   }
 
   return EXIT_SUCCESS;
