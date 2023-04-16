@@ -345,14 +345,11 @@ bool solve_cross_check(state *pState)
 {
   bool changed = false;
 
-  puts("Cross Check:");
-  print_state(pState);
-
-  uint16_t block_more_than_once[9];
-  uint32_t block_more_than_once_triple[9];
-  uint16_t hline_more_than_once[9];
-  uint32_t hline_more_than_once_triple[9];
-  uint32_t vline_more_than_once_triple[3];
+  uint16_t moreThanOncePerBlock[9];
+  uint32_t moreThanOncePerBlockTriple[9];
+  uint16_t moreThanOncePerHLine[9];
+  uint32_t moreThanOncePerHLineTriple[9];
+  uint32_t moreThanOncePerVLineTriple[3];
 
   uint16_t digitAllowedMask = s_all;
 
@@ -371,7 +368,7 @@ bool solve_cross_check(state *pState)
         atLeastOnce |= triple;
       }
 
-      vline_more_than_once_triple[hb] = moreThanOnce;
+      moreThanOncePerVLineTriple[hb] = moreThanOnce;
     }
   }
 
@@ -395,7 +392,7 @@ bool solve_cross_check(state *pState)
         atLeastOnce |= triple;
       }
 
-      hline_more_than_once_triple[l] = moreThanOnce;
+      moreThanOncePerHLineTriple[l] = moreThanOnce;
 
       const uint32_t t1 = (atLeastOnce >> 10);
       const uint32_t t2 = (atLeastOnce >> 20);
@@ -403,7 +400,7 @@ bool solve_cross_check(state *pState)
       atLeastOnce |= t1;
       moreThanOnce |= (atLeastOnce & t2) | (moreThanOnce >> 20);
 
-      hline_more_than_once[l] = (uint16_t)moreThanOnce & s_all;
+      moreThanOncePerHLine[l] = (uint16_t)moreThanOnce & s_all;
     }
   }
 
@@ -430,7 +427,7 @@ bool solve_cross_check(state *pState)
           atLeastOnce |= triple;
         }
 
-        block_more_than_once_triple[blockIndex] = moreThanOnce;
+        moreThanOncePerBlockTriple[blockIndex] = moreThanOnce;
 
         const uint32_t t1 = (atLeastOnce >> 10);
         const uint32_t t2 = (atLeastOnce >> 20);
@@ -438,17 +435,17 @@ bool solve_cross_check(state *pState)
         atLeastOnce |= t1;
         moreThanOnce |= (atLeastOnce & t2) | (moreThanOnce >> 20);
 
-        block_more_than_once[blockIndex] = (uint16_t)moreThanOnce & s_all;
+        moreThanOncePerBlock[blockIndex] = (uint16_t)moreThanOnce & s_all;
       }
     }
   }
 
   for (size_t hblock = 0; hblock < 3; hblock++)
   {
-    for (uint32_t vline_offset = 0; vline_offset < 21; vline_offset += 10)
+    for (uint32_t vlineOffset = 0; vlineOffset < 21; vlineOffset += 10)
     {
-      uint32_t vline_as_triple[3];
-      memset(&vline_as_triple, 0, sizeof(vline_as_triple));
+      uint32_t vlineTriplePacked[3];
+      memset(&vlineTriplePacked, 0, sizeof(vlineTriplePacked));
 
       // Turn vline into triples.
       {
@@ -456,41 +453,31 @@ bool solve_cross_check(state *pState)
 
         for (size_t vblock = 0; vblock < 3; vblock++)
           for (size_t sl_offset = 0; sl_offset < 21; sl_offset += 10, l++)
-            vline_as_triple[vblock] |= (((pState->x[l * 3 + hblock] >> vline_offset) & s_all) << sl_offset);
+            vlineTriplePacked[vblock] |= (((pState->x[l * 3 + hblock] >> vlineOffset) & s_all) << sl_offset);
       }
 
-      puts("vline_as_triple");
-      inspect_triple(vline_as_triple[0]);
-      inspect_triple(vline_as_triple[1]);
-      inspect_triple(vline_as_triple[2]);
-
-      const uint32_t vline_more_than_once = (vline_more_than_once_triple[hblock] >> vline_offset) & digitAllowedMask;
-      uint32_t candidates = vline_more_than_once >> 1;
+      const uint32_t currentVLineMoreThanOnce = (moreThanOncePerVLineTriple[hblock] >> vlineOffset) & digitAllowedMask;
+      uint32_t digitCandidateMask = currentVLineMoreThanOnce >> 1;
       uint32_t currentDigit = 0;
 
-      puts("vline_more_than_once");
-      inspect_triple_value(vline_more_than_once);
-
-      while (candidates)
+      while (digitCandidateMask)
       {
         DWORD bitIndex;
-        BitScanForward(&bitIndex, candidates);
+        BitScanForward(&bitIndex, digitCandidateMask);
         currentDigit += (bitIndex + 1);
-        candidates >>= (bitIndex + 1);
+        digitCandidateMask >>= (bitIndex + 1);
 
-        printf("\tcurrentDigit: %" PRIu32 "\n", currentDigit);
+        const uint32_t digitMaskTriple0 = 1 << currentDigit;
+        const uint32_t digitMaskTriple1 = digitMaskTriple0 << 10;
+        const uint32_t digitMaskTriple2 = digitMaskTriple0 << 20;
+        const uint32_t digitMaskAllTriples = digitMaskTriple0 | digitMaskTriple1 | digitMaskTriple2;
 
-        const uint32_t single_mask_0 = 1 << currentDigit;
-        const uint32_t single_mask_1 = single_mask_0 << 10;
-        const uint32_t single_mask_2 = single_mask_0 << 20;
-        const uint32_t triple_mask = single_mask_0 | single_mask_1 | single_mask_2;
-
-        uint8_t count[9];
-        uint16_t count_mask[9];
-        uint16_t line_mask[9];
-        memset(&count, 0, sizeof(count));
-        memset(&count_mask, 0, sizeof(count_mask));
-        memset(&line_mask, 0, sizeof(line_mask));
+        uint8_t digitsPerHLineCount[9];
+        uint16_t digitsPerHLineCount_HLineMasks[9];
+        uint16_t digitsInHLineBitMask[9];
+        memset(&digitsPerHLineCount, 0, sizeof(digitsPerHLineCount));
+        memset(&digitsPerHLineCount_HLineMasks, 0, sizeof(digitsPerHLineCount_HLineMasks));
+        memset(&digitsInHLineBitMask, 0, sizeof(digitsInHLineBitMask));
 
         // for each hline, how many match this digit.
         {
@@ -501,139 +488,105 @@ bool solve_cross_check(state *pState)
             if (pState->lineH & hline_bit)
               continue;
 
-            if (hline_more_than_once[hline] & vline_more_than_once)
+            if (moreThanOncePerHLine[hline] & currentVLineMoreThanOnce)
             {
               size_t line_count = 0;
 
               for (size_t hb = 0; hb < 3; hb++)
               {
                 const uint32_t triple = pState->x[hline * 3 + hb];
-                line_count += __popcnt64(triple & triple_mask);
-                line_mask[hline] |= (!!(triple & single_mask_0) | (!!(triple & single_mask_1) << 1) | (!!(triple & single_mask_2) << 2)) << (hb * 3);
+                line_count += __popcnt64(triple & digitMaskAllTriples);
+                digitsInHLineBitMask[hline] |= (!!(triple & digitMaskTriple0) | (!!(triple & digitMaskTriple1) << 1) | (!!(triple & digitMaskTriple2) << 2)) << (hb * 3);
               }
 
-              count[line_count]++;
-              count_mask[line_count] |= hline_bit;
+              digitsPerHLineCount[line_count]++;
+              digitsPerHLineCount_HLineMasks[line_count] |= hline_bit;
             }
           }
 
-          for (size_t i = 0; i < 9; i++)
-          {
-            printf("\t\tcount %" PRIu64 ": %" PRIu8 "\n", i, count[i]);
-            
-            printf("\t\tcount_mask %" PRIu64 ": ", i);
-            inspect_bits(count_mask[i]);
-
-            printf("\t\tline_mask %" PRIu64 ": ", i);
-            inspect_bits(line_mask[i]);
-          }
-
-          puts("");
-
-          DEBUG_ASSERT(count[0] == 0);
+          DEBUG_ASSERT(digitsPerHLineCount[0] == 0);
         }
 
-        uint8_t runningCount = 0;
-        uint16_t runningMask = 0;
+        uint8_t involvedDigitsCount = 0;
+        uint16_t involvedHLinePositionMask = 0;
 
         for (size_t i = 2; i < 9; i++) // with 1, 9 there'd be nothing to eliminate. 0 would be invalid anyways.
         {
-          runningCount += count[i];
-          runningMask |= count_mask[i];
+          involvedDigitsCount += digitsPerHLineCount[i];
+          involvedHLinePositionMask |= digitsPerHLineCount_HLineMasks[i];
 
-          if (runningCount < i) // There can now technically be n with x >= 2 same.
+          if (involvedDigitsCount < i) // There can now technically be n with x >= 2 same.
             continue;
 
-          uint16_t runningMaskRemaining = runningMask;
-          size_t lineIndex = (size_t)-1;
+          uint16_t involvedHLinePositionMaskRemaining = involvedHLinePositionMask;
+          size_t currentHLineIndex = (size_t)-1;
 
-          while (runningMaskRemaining)
+          while (involvedHLinePositionMaskRemaining)
           {
-            BitScanForward(&bitIndex, runningMaskRemaining);
-            lineIndex += (bitIndex + 1);
-            runningMaskRemaining >>= (bitIndex + 1);
+            BitScanForward(&bitIndex, involvedHLinePositionMaskRemaining);
+            currentHLineIndex += (bitIndex + 1);
+            involvedHLinePositionMaskRemaining >>= (bitIndex + 1);
 
-            if (__popcnt64(runningMaskRemaining) + 1 < i)
+            if (__popcnt64(involvedHLinePositionMaskRemaining) + 1 < i)
               break; // not enough matches left to find i matching.
 
-            if (__popcnt64(line_mask[lineIndex]) != i)
+            if (__popcnt64(digitsInHLineBitMask[currentHLineIndex]) != i)
               continue; // this one doesn't actually contain i, so we better find a better one to compare with.
 
-            printf("\t\tlineIndex %" PRIu64 " (looking for %" PRIu64 " %" PRIu32 "s, there should be %" PRIu64 " others)\n", lineIndex, i, currentDigit, __popcnt64(runningMaskRemaining));
-            
-            uint16_t runningMaskPair = runningMaskRemaining;
-            size_t pairLineIndex = lineIndex;
+            uint16_t possibleMatchingHLinePositionsMask = involvedHLinePositionMaskRemaining;
+            size_t comparedHLineIndex = currentHLineIndex;
 
-            const uint32_t line0 = line_mask[lineIndex];
-            uint32_t matchingLines = 1 << lineIndex;
+            const uint32_t currentHLineDigitBitMask = digitsInHLineBitMask[currentHLineIndex];
+            uint32_t matchingHLinesBitMask = 1 << currentHLineIndex;
 
-            while (runningMaskPair)
+            while (possibleMatchingHLinePositionsMask)
             {
-              BitScanForward(&bitIndex, runningMaskPair);
-              pairLineIndex += (bitIndex + 1);
-              runningMaskPair >>= (bitIndex + 1);
+              BitScanForward(&bitIndex, possibleMatchingHLinePositionsMask);
+              comparedHLineIndex += (bitIndex + 1);
+              possibleMatchingHLinePositionsMask >>= (bitIndex + 1);
 
-              const size_t matchCount = __popcnt64(line_mask[pairLineIndex] & line0);
-              const size_t totalCount = __popcnt64(line_mask[pairLineIndex]);
+              const size_t currentWithComparedHLineMatches = __popcnt64(digitsInHLineBitMask[comparedHLineIndex] & currentHLineDigitBitMask);
+              const size_t availablePossibilitiesPerComparedLine = __popcnt64(digitsInHLineBitMask[comparedHLineIndex]);
 
-              matchingLines |= ((!!(matchCount == totalCount)) << pairLineIndex);
+              matchingHLinesBitMask |= ((!!(currentWithComparedHLineMatches == availablePossibilitiesPerComparedLine)) << comparedHLineIndex);
             }
 
-            if (__popcnt64(matchingLines) >= i) // we found >= i matching lines!
+            if (__popcnt64(matchingHLinesBitMask) >= i) // we found >= i matching lines!
             {
-              fputs("\t\tmatchingLines: ", stdout);
-              inspect_bits(matchingLines);
-              fputs("\t\ttouched (ln0): ", stdout);
-              inspect_bits(line0);
-
-              uint32_t touchedLeft = line0;
-              size_t touchedIndex = (size_t)-1;
+              uint32_t matchedHLineDigitsRemaining = currentHLineDigitBitMask;
+              size_t currentMatchedHLineIndex = (size_t)-1;
 
               const uint32_t currentDigitMask = (1 << currentDigit) * (1 | (1 << 10) | (1 << 20));
 
               // Purge everything else in all matching lines.
-              while (touchedLeft)
+              while (matchedHLineDigitsRemaining)
               {
-                BitScanForward(&bitIndex, touchedLeft);
-                touchedIndex += (bitIndex + 1);
-                touchedLeft >>= (bitIndex + 1);
+                BitScanForward(&bitIndex, matchedHLineDigitsRemaining);
+                currentMatchedHLineIndex += (bitIndex + 1);
+                matchedHLineDigitsRemaining >>= (bitIndex + 1);
 
-                printf("\t\t\tmatchingLineIndex: %" PRIu64 "\n", touchedIndex);
+                const size_t currentMatchedHLineOffset = currentMatchedHLineIndex / 3;
+                const size_t currentMatchedHLineTripleOffset = currentMatchedHLineIndex % 3;
+                const uint32_t currentMatchedHLineTripleMask = s_all << (10 * currentMatchedHLineTripleOffset);
+                const uint32_t digitInMatchedHLineTripleMask = ~(currentDigitMask & currentMatchedHLineTripleMask);
 
-                const size_t touchedOffsetIndex = touchedIndex / 3;
-                const size_t touchedLineOffsetTripleValue = touchedIndex % 3;
-                const uint32_t touchedLineTripleMask = s_all << (10 * touchedLineOffsetTripleValue);
-                const uint32_t digitTripleMask = ~(currentDigitMask & touchedLineTripleMask);
+                uint32_t nonContainedHLinesRemainingBitMask = (~matchingHLinesBitMask & 0b111111111); // these are lines!
+                uint32_t nonContainedHLineIndex = (uint32_t)-1;
 
-                fputs("\t\t\tdigitTripleMask: ", stdout);
-                inspect_triple(digitTripleMask);
-
-                uint32_t nonContainedLinesLeft = (~matchingLines & 0b111111111); // these are lines!
-                uint32_t nonContainedLineIndex = (uint32_t)-1;
-
-                while (nonContainedLinesLeft)
+                while (nonContainedHLinesRemainingBitMask)
                 {
-                  BitScanForward(&bitIndex, nonContainedLinesLeft);
-                  nonContainedLineIndex += (bitIndex + 1);
-                  nonContainedLinesLeft >>= (bitIndex + 1);
+                  BitScanForward(&bitIndex, nonContainedHLinesRemainingBitMask);
+                  nonContainedHLineIndex += (bitIndex + 1);
+                  nonContainedHLinesRemainingBitMask >>= (bitIndex + 1);
 
-                  const uint32_t lineTriple = pState->x[nonContainedLineIndex * 3 + touchedOffsetIndex];
-                  const uint32_t newValue = lineTriple & digitTripleMask;
+                  const uint32_t hLineTriple = pState->x[nonContainedHLineIndex * 3 + currentMatchedHLineOffset];
+                  const uint32_t newHLineTriple = hLineTriple & digitInMatchedHLineTripleMask;
 
-                  printf("\t\t\t\tline %" PRIu32 " | before: ", nonContainedLineIndex);
-                  inspect_triple(lineTriple);
+                  changed |= newHLineTriple != hLineTriple;
 
-                  printf("\t\t\t\tline %" PRIu32 " | after:  ", nonContainedLineIndex);
-                  inspect_triple(newValue);
-
-                  changed |= newValue != lineTriple;
-
-                  pState->x[nonContainedLineIndex * 3 + touchedOffsetIndex] = newValue;
+                  pState->x[nonContainedHLineIndex * 3 + currentMatchedHLineOffset] = newHLineTriple;
                 }
               }
-
-              puts("\nAfter:");
-              print_state(pState);
 
               digitAllowedMask &= ~(uint16_t)(1 << currentDigit);
 
