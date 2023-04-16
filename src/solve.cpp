@@ -336,70 +336,421 @@ bool check(const state *pState)
   return true;
 }
 
+#include "io.h"
+
+#include <stdio.h>
+#include <inttypes.h>
+
+bool solve_cross_check(state *pState)
+{
+  bool changed = false;
+
+  puts("Cross Check:");
+  print_state(pState);
+
+  uint16_t block_more_than_once[9];
+  uint32_t block_more_than_once_triple[9];
+  uint16_t hline_more_than_once[9];
+  uint32_t hline_more_than_once_triple[9];
+  uint32_t vline_more_than_once_triple[3];
+
+  uint16_t digitAllowedMask = s_all;
+
+  // Vertical Line Setup.
+  {
+    for (size_t hb = 0; hb < 3; hb++)
+    {
+      uint32_t atLeastOnce = 0;
+      uint32_t moreThanOnce = 0;
+
+      for (size_t l = 0; l < 9; l++)
+      {
+        const uint32_t triple = pState->x[l * 3 + hb];
+
+        moreThanOnce |= (atLeastOnce & triple);
+        atLeastOnce |= triple;
+      }
+
+      vline_more_than_once_triple[hb] = moreThanOnce;
+    }
+  }
+
+  // Horizontal Line Setup.
+  {
+    uint16_t bit = 1;
+
+    for (size_t l = 0; l < 9; l++, bit <<= 1)
+    {
+      if (pState->lineH & bit)
+        continue;
+
+      uint32_t atLeastOnce = 0;
+      uint32_t moreThanOnce = 0;
+
+      for (size_t hb = 0; hb < 3; hb++)
+      {
+        const uint32_t triple = pState->x[l * 3 + hb];
+
+        moreThanOnce |= (atLeastOnce & triple);
+        atLeastOnce |= triple;
+      }
+
+      hline_more_than_once_triple[l] = moreThanOnce;
+
+      const uint32_t t1 = (atLeastOnce >> 10);
+      const uint32_t t2 = (atLeastOnce >> 20);
+      moreThanOnce |= (atLeastOnce & t1) | (moreThanOnce >> 10);
+      atLeastOnce |= t1;
+      moreThanOnce |= (atLeastOnce & t2) | (moreThanOnce >> 20);
+
+      hline_more_than_once[l] = (uint16_t)moreThanOnce & s_all;
+    }
+  }
+
+  // Block Setup.
+  {
+    uint16_t bit = 1;
+    uint16_t blockIndex = 0;
+
+    for (size_t vb = 0; vb < 3; vb++)
+    {
+      for (size_t hb = 0; hb < 3; hb++, bit <<= 1, blockIndex++)
+      {
+        if (pState->blocks & bit)
+          continue;
+
+        uint32_t atLeastOnce = 0;
+        uint32_t moreThanOnce = 0;
+
+        for (size_t vt = 0; vt < 3; vt++)
+        {
+          const uint32_t triple = pState->x[vb * 9 + hb + vt * 3];
+
+          moreThanOnce |= (atLeastOnce & triple);
+          atLeastOnce |= triple;
+        }
+
+        block_more_than_once_triple[blockIndex] = moreThanOnce;
+
+        const uint32_t t1 = (atLeastOnce >> 10);
+        const uint32_t t2 = (atLeastOnce >> 20);
+        moreThanOnce |= (atLeastOnce & t1) | (moreThanOnce >> 10);
+        atLeastOnce |= t1;
+        moreThanOnce |= (atLeastOnce & t2) | (moreThanOnce >> 20);
+
+        block_more_than_once[blockIndex] = (uint16_t)moreThanOnce & s_all;
+      }
+    }
+  }
+
+  for (size_t hblock = 0; hblock < 3; hblock++)
+  {
+    for (uint32_t vline_offset = 0; vline_offset < 21; vline_offset += 10)
+    {
+      uint32_t vline_as_triple[3];
+      memset(&vline_as_triple, 0, sizeof(vline_as_triple));
+
+      // Turn vline into triples.
+      {
+        size_t l = 0;
+
+        for (size_t vblock = 0; vblock < 3; vblock++)
+          for (size_t sl_offset = 0; sl_offset < 21; sl_offset += 10, l++)
+            vline_as_triple[vblock] |= (((pState->x[l * 3 + hblock] >> vline_offset) & s_all) << sl_offset);
+      }
+
+      puts("vline_as_triple");
+      inspect_triple(vline_as_triple[0]);
+      inspect_triple(vline_as_triple[1]);
+      inspect_triple(vline_as_triple[2]);
+
+      const uint32_t vline_more_than_once = (vline_more_than_once_triple[hblock] >> vline_offset) & digitAllowedMask;
+      uint32_t candidates = vline_more_than_once >> 1;
+      uint32_t currentDigit = 0;
+
+      puts("vline_more_than_once");
+      inspect_triple_value(vline_more_than_once);
+
+      while (candidates)
+      {
+        DWORD bitIndex;
+        BitScanForward(&bitIndex, candidates);
+        currentDigit += (bitIndex + 1);
+        candidates >>= (bitIndex + 1);
+
+        printf("\tcurrentDigit: %" PRIu32 "\n", currentDigit);
+
+        const uint32_t single_mask_0 = 1 << currentDigit;
+        const uint32_t single_mask_1 = single_mask_0 << 10;
+        const uint32_t single_mask_2 = single_mask_0 << 20;
+        const uint32_t triple_mask = single_mask_0 | single_mask_1 | single_mask_2;
+
+        uint8_t count[9];
+        uint16_t count_mask[9];
+        uint16_t line_mask[9];
+        memset(&count, 0, sizeof(count));
+        memset(&count_mask, 0, sizeof(count_mask));
+        memset(&line_mask, 0, sizeof(line_mask));
+
+        // for each hline, how many match this digit.
+        {
+          uint32_t hline_bit = 1;
+
+          for (size_t hline = 0; hline < 9; hline++, hline_bit <<= 1)
+          {
+            if (pState->lineH & hline_bit)
+              continue;
+
+            if (hline_more_than_once[hline] & vline_more_than_once)
+            {
+              size_t line_count = 0;
+
+              for (size_t hb = 0; hb < 3; hb++)
+              {
+                const uint32_t triple = pState->x[hline * 3 + hb];
+                line_count += __popcnt64(triple & triple_mask);
+                line_mask[hline] |= (!!(triple & single_mask_0) | (!!(triple & single_mask_1) << 1) | (!!(triple & single_mask_2) << 2)) << (hb * 3);
+              }
+
+              count[line_count]++;
+              count_mask[line_count] |= hline_bit;
+            }
+          }
+
+          for (size_t i = 0; i < 9; i++)
+          {
+            printf("\t\tcount %" PRIu64 ": %" PRIu8 "\n", i, count[i]);
+            
+            printf("\t\tcount_mask %" PRIu64 ": ", i);
+            inspect_bits(count_mask[i]);
+
+            printf("\t\tline_mask %" PRIu64 ": ", i);
+            inspect_bits(line_mask[i]);
+          }
+
+          puts("");
+
+          DEBUG_ASSERT(count[0] == 0);
+        }
+
+        uint8_t runningCount = 0;
+        uint16_t runningMask = 0;
+
+        for (size_t i = 2; i < 9; i++) // with 1, 9 there'd be nothing to eliminate. 0 would be invalid anyways.
+        {
+          runningCount += count[i];
+          runningMask |= count_mask[i];
+
+          if (runningCount < i) // There can now technically be n with x >= 2 same.
+            continue;
+
+          uint16_t runningMaskRemaining = runningMask;
+          size_t lineIndex = (size_t)-1;
+
+          while (runningMaskRemaining)
+          {
+            BitScanForward(&bitIndex, runningMaskRemaining);
+            lineIndex += (bitIndex + 1);
+            runningMaskRemaining >>= (bitIndex + 1);
+
+            if (__popcnt64(runningMaskRemaining) + 1 < i)
+              break; // not enough matches left to find i matching.
+
+            if (__popcnt64(line_mask[lineIndex]) != i)
+              continue; // this one doesn't actually contain i, so we better find a better one to compare with.
+
+            printf("\t\tlineIndex %" PRIu64 " (looking for %" PRIu64 " %" PRIu32 "s, there should be %" PRIu64 " others)\n", lineIndex, i, currentDigit, __popcnt64(runningMaskRemaining));
+            
+            uint16_t runningMaskPair = runningMaskRemaining;
+            size_t pairLineIndex = lineIndex;
+
+            const uint32_t line0 = line_mask[lineIndex];
+            uint32_t matchingLines = 1 << lineIndex;
+
+            while (runningMaskPair)
+            {
+              BitScanForward(&bitIndex, runningMaskPair);
+              pairLineIndex += (bitIndex + 1);
+              runningMaskPair >>= (bitIndex + 1);
+
+              const size_t matchCount = __popcnt64(line_mask[pairLineIndex] & line0);
+              const size_t totalCount = __popcnt64(line_mask[pairLineIndex]);
+
+              matchingLines |= ((!!(matchCount == totalCount)) << pairLineIndex);
+            }
+
+            if (__popcnt64(matchingLines) >= i) // we found >= i matching lines!
+            {
+              fputs("\t\tmatchingLines: ", stdout);
+              inspect_bits(matchingLines);
+              fputs("\t\ttouched (ln0): ", stdout);
+              inspect_bits(line0);
+
+              uint32_t touchedLeft = line0;
+              size_t touchedIndex = (size_t)-1;
+
+              const uint32_t currentDigitMask = (1 << currentDigit) * (1 | (1 << 10) | (1 << 20));
+
+              // Purge everything else in all matching lines.
+              while (touchedLeft)
+              {
+                BitScanForward(&bitIndex, touchedLeft);
+                touchedIndex += (bitIndex + 1);
+                touchedLeft >>= (bitIndex + 1);
+
+                printf("\t\t\tmatchingLineIndex: %" PRIu64 "\n", touchedIndex);
+
+                const size_t touchedOffsetIndex = touchedIndex / 3;
+                const size_t touchedLineOffsetTripleValue = touchedIndex % 3;
+                const uint32_t touchedLineTripleMask = s_all << (10 * touchedLineOffsetTripleValue);
+                const uint32_t digitTripleMask = ~(currentDigitMask & touchedLineTripleMask);
+
+                fputs("\t\t\tdigitTripleMask: ", stdout);
+                inspect_triple(digitTripleMask);
+
+                size_t lineBit = 1;
+
+                for (size_t l = 0; l < 9; l++, lineBit <<= 1)
+                {
+                  if (matchingLines & lineBit)
+                    continue;
+
+                  const uint32_t lineTriple = pState->x[l * 3 + touchedOffsetIndex];
+                  const uint32_t newValue = lineTriple & digitTripleMask;
+
+                  printf("\t\t\t\tline %" PRIu64 " | before: ", l);
+                  inspect_triple(lineTriple);
+
+                  printf("\t\t\t\tline %" PRIu64 " | after:  ", l);
+                  inspect_triple(newValue);
+
+                  changed |= newValue != lineTriple;
+
+                  pState->x[l * 3 + touchedOffsetIndex] = newValue;
+                }
+              }
+
+              puts("\nAfter:");
+              print_state(pState);
+
+              digitAllowedMask &= ~(uint16_t)(1 << currentDigit);
+
+              goto next_candidate;
+            }
+          }
+        }
+
+      next_candidate:;
+      }
+    }
+  }
+
+  return changed;
+}
+
 void simple_solve(state *pState)
 {
-  bool found = true;
+  uint8_t check_pattern = 0b111;
 
-  while (found)
+  while (true)
   {
-    found = false;
-
-    if (solve_vlines(pState))
+    if (check_pattern & 0b001)
     {
-      recalc_done(pState);
-      found = true;
+      check_pattern &= 0b110;
+
+      if (solve_vlines(pState))
+      {
+        recalc_done(pState);
+        check_pattern = 0b110;
+      }
     }
 
-    if (solve_hlines(pState))
+    if (check_pattern & 0b010)
     {
-      recalc_done(pState);
-      found = true;
+      check_pattern &= 0b101;
+
+      if (solve_hlines(pState))
+      {
+        recalc_done(pState);
+        check_pattern = 0b101;
+      }
     }
 
-    if (solve_blocks(pState))
+    if (check_pattern & 0b100)
     {
-      recalc_done(pState);
-      found = true;
+      check_pattern &= 0b001;
+
+      if (solve_blocks(pState))
+      {
+        recalc_done(pState);
+        check_pattern = 0b011;
+      }
+    }
+
+    if (!check_pattern)
+    {
+      if (solve_cross_check(pState))
+      {
+        recalc_done(pState);
+        check_pattern = 0b111;
+      }
+      else
+      {
+        break;
+      }
     }
   }
 }
 
 bool checked_solve(state *pState)
 {
-  bool found = true;
+  uint8_t check_pattern = 0b111;
 
-  while (found)
+  while (check_pattern)
   {
-    found = false;
-
-    if (solve_vlines(pState))
+    if (check_pattern & 0b001)
     {
-      recalc_done(pState);
+      check_pattern &= 0b110;
 
-      if (!check_blocks(pState) || !check_hlines(pState) || !check(pState))
-        return false;
+      if (solve_vlines(pState))
+      {
+        recalc_done(pState);
 
-      found = true;
+        if (!check_blocks(pState) || !check_hlines(pState) || !check(pState))
+          return false;
+
+        check_pattern = 0b110;
+      }
     }
 
-    if (solve_hlines(pState))
+    if (check_pattern & 0b010)
     {
-      recalc_done(pState);
+      check_pattern &= 0b101;
 
-      if (!check_blocks(pState) || !check_vlines(pState) || !check(pState))
-        return false;
+      if (solve_hlines(pState))
+      {
+        recalc_done(pState);
 
-      found = true;
+        if (!check_blocks(pState) || !check_vlines(pState) || !check(pState))
+          return false;
+
+        check_pattern = 0b101;
+      }
     }
 
-    if (solve_blocks(pState))
+    if (check_pattern & 0b100)
     {
-      recalc_done(pState);
+      check_pattern &= 0b011;
 
-      if (!check_vlines(pState) || !check_hlines(pState) || !check(pState))
-        return false;
+      if (solve_blocks(pState))
+      {
+        recalc_done(pState);
 
-      found = true;
+        if (!check_vlines(pState) || !check_hlines(pState) || !check(pState))
+          return false;
+
+        check_pattern = 0b011;
+      }
     }
   }
 
