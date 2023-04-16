@@ -608,25 +608,27 @@ bool solve_cross_check(state *pState)
                 fputs("\t\t\tdigitTripleMask: ", stdout);
                 inspect_triple(digitTripleMask);
 
-                size_t lineBit = 1;
+                uint32_t nonContainedLinesLeft = (~matchingLines & 0b111111111); // these are lines!
+                uint32_t nonContainedLineIndex = (uint32_t)-1;
 
-                for (size_t l = 0; l < 9; l++, lineBit <<= 1)
+                while (nonContainedLinesLeft)
                 {
-                  if (matchingLines & lineBit)
-                    continue;
+                  BitScanForward(&bitIndex, nonContainedLinesLeft);
+                  nonContainedLineIndex += (bitIndex + 1);
+                  nonContainedLinesLeft >>= (bitIndex + 1);
 
-                  const uint32_t lineTriple = pState->x[l * 3 + touchedOffsetIndex];
+                  const uint32_t lineTriple = pState->x[nonContainedLineIndex * 3 + touchedOffsetIndex];
                   const uint32_t newValue = lineTriple & digitTripleMask;
 
-                  printf("\t\t\t\tline %" PRIu64 " | before: ", l);
+                  printf("\t\t\t\tline %" PRIu32 " | before: ", nonContainedLineIndex);
                   inspect_triple(lineTriple);
 
-                  printf("\t\t\t\tline %" PRIu64 " | after:  ", l);
+                  printf("\t\t\t\tline %" PRIu32 " | after:  ", nonContainedLineIndex);
                   inspect_triple(newValue);
 
                   changed |= newValue != lineTriple;
 
-                  pState->x[l * 3 + touchedOffsetIndex] = newValue;
+                  pState->x[nonContainedLineIndex * 3 + touchedOffsetIndex] = newValue;
                 }
               }
 

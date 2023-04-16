@@ -220,9 +220,8 @@ void print_state(const state *pState)
 
 void inspect_triple_value_internal(const uint32_t value)
 {
-  if (value & s_done)
-    fputs("(done) ", stdout);
-
+  fputc(value & s_done ? '!' : ' ', stdout);
+ 
   for (uint8_t i = 1; i <= 9; i++)
   {
     if (value & (1 << i))
