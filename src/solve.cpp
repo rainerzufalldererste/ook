@@ -801,6 +801,9 @@ void simple_solve(state *pState)
 
     if (!check_pattern)
     {
+      if (pState->blocks == 0b111111111 || pState->lineH == 0b111111111)
+        break;
+
       if (solve_cross_check(pState))
       {
         recalc_done(pState);
@@ -862,6 +865,26 @@ bool checked_solve(state *pState)
           return false;
 
         check_pattern = 0b011;
+      }
+    }
+
+    if (!check_pattern)
+    {
+      if (pState->blocks == 0b111111111 || pState->lineH == 0b111111111)
+        break;
+
+      if (solve_cross_check(pState))
+      {
+        recalc_done(pState);
+
+        if (!check_vlines(pState) || !check_hlines(pState) || !check(pState))
+          return false;
+
+        check_pattern = 0b111;
+      }
+      else
+      {
+        break;
       }
     }
   }
