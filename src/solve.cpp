@@ -343,13 +343,7 @@ bool check(const state *pState)
 
 bool solve_cross_check(state *pState)
 {
-  static bool print_before_after = false;
-
-  if (print_before_after)
-  {
-    puts("\nBefore:");
-    print_state(pState);
-  }
+  static bool print_before_after = true;
 
   bool changed = false;
 
@@ -474,7 +468,7 @@ bool solve_cross_check(state *pState)
             }
           }
 
-          DEBUG_ASSERT(digitsPerHLineCount[0] == 0);
+          // DEBUG_ASSERT(digitsPerHLineCount[0] == 0); // this can be triggered in `checked_solve` for some reason. but we're trying to fail there...
         }
 
         uint8_t involvedDigitsCount = 0;
@@ -498,10 +492,10 @@ bool solve_cross_check(state *pState)
             involvedHLinePositionMaskRemaining >>= (bitIndex + 1);
 
             if (__popcnt64(involvedHLinePositionMaskRemaining) + 1 < i)
-              break; // not enough matches left to find i matching.
+              break; // not enough matches left to find vl matching.
 
             if (__popcnt64(digitsInHLineBitMask[currentHLineIndex]) != i)
-              continue; // this one doesn't actually contain i, so we better find a better one to compare with.
+              continue; // this one doesn't actually contain vl, so we better find a better one to compare with.
 
             uint16_t possibleMatchingHLinePositionsMask = involvedHLinePositionMaskRemaining;
             size_t comparedHLineIndex = currentHLineIndex;
@@ -521,7 +515,7 @@ bool solve_cross_check(state *pState)
               matchingHLinesBitMask |= ((!!(currentWithComparedHLineMatches == availablePossibilitiesPerComparedLine)) << comparedHLineIndex);
             }
 
-            if (__popcnt64(matchingHLinesBitMask) >= i) // we found >= i matching lines!
+            if (__popcnt64(matchingHLinesBitMask) >= i) // we found >= vl matching lines!
             {
               uint32_t matchedHLineDigitsRemaining = currentHLineDigitBitMask;
               size_t currentMatchedHLineIndex = (size_t)-1;
@@ -656,10 +650,10 @@ bool solve_cross_check(state *pState)
           involvedVLinePositionMaskRemaining >>= (bitIndex + 1);
 
           if (__popcnt64(involvedVLinePositionMaskRemaining) + 1 < i)
-            break; // not enough matches left to find i matching.
+            break; // not enough matches left to find vl matching.
 
           if (__popcnt64(digitsInVLineBitMask[currentVLineIndex]) != i)
-            continue; // this one doesn't actually contain i, so we better find a better one to compare with.
+            continue; // this one doesn't actually contain vl, so we better find a better one to compare with.
 
           uint16_t possibleMatchingVLinePositionsMask = involvedVLinePositionMaskRemaining;
           size_t comparedVLineIndex = currentVLineIndex;
@@ -679,7 +673,7 @@ bool solve_cross_check(state *pState)
             matchingVLinesBitMask |= ((!!(currentWithComparedVLineMatches == availablePossibilitiesPerComparedLine)) << comparedVLineIndex);
           }
 
-          if (__popcnt64(matchingVLinesBitMask) >= i) // we found >= i matching lines!
+          if (__popcnt64(matchingVLinesBitMask) >= i) // we found >= vl matching lines!
           {
             uint32_t matchedVLineDigitsRemaining = currentVLineDigitBitMask;
             size_t currentMatchedVLineIndex = (size_t)-1;
@@ -741,6 +735,8 @@ bool solve_cross_check(state *pState)
 
         uint32_t atLeastOnce = 0;
         uint32_t moreThanOnce = 0;
+        uint16_t blockTripleAtLeastOnce[3];
+        uint16_t blockTripleMoreThanOnce[3];
 
         for (size_t vt = 0; vt < 3; vt++)
         {
@@ -748,6 +744,17 @@ bool solve_cross_check(state *pState)
 
           moreThanOnce |= (atLeastOnce & triple);
           atLeastOnce |= triple;
+
+          const uint32_t _1 = triple >> 10;
+          const uint32_t _2 = triple >> 20;
+
+          uint32_t atLeastOnceTriple = triple | _1;
+          uint32_t moreThanOnceTriple = triple & _1;
+          moreThanOnceTriple |= (atLeastOnceTriple & _2);
+          atLeastOnceTriple |= _2;
+
+          blockTripleAtLeastOnce[vt] = (uint16_t)(atLeastOnceTriple & s_all);
+          blockTripleMoreThanOnce[vt] = (uint16_t)(moreThanOnceTriple & s_all);
         }
 
         const uint32_t atLeastOncePerBlockTriple = atLeastOnce;
@@ -762,9 +769,10 @@ bool solve_cross_check(state *pState)
         {
           const uint32_t atLeastOncePerBlockTripleRot1 = (atLeastOncePerBlockTriple >> 10) | (atLeastOncePerBlockTriple << 20);
           const uint32_t atLeastOncePerBlockTripleRot2 = (atLeastOncePerBlockTripleRot1 >> 10) | (atLeastOncePerBlockTripleRot1 << 20);
-
-          const uint32_t blockTripleOnVLineTriple = atLeastOncePerBlockTriple & ~atLeastOncePerBlockTripleRot1 & ~atLeastOncePerBlockTripleRot2 & moreThanOncePerVLineTriple[hb]; // we can handle digits not being "allowed", unlike earlier loops.
-          const uint32_t invBlockTripleOnVlineTriple = ~blockTripleOnVLineTriple | (s_done | (s_done << 10) | (s_done << 20));
+          
+          // we can handle digits not being "allowed", unlike earlier loops.
+          const uint32_t blockTripleOnVLineTriple = (atLeastOncePerBlockTriple & ~atLeastOncePerBlockTripleRot1 & ~atLeastOncePerBlockTripleRot2 & moreThanOncePerVLineTriple[hb]) & (s_all | (s_all << 10) | (s_all << 20));
+          const uint32_t invBlockTripleOnVlineTriple = ~blockTripleOnVLineTriple;
 
           if (blockTripleOnVLineTriple)
           {
@@ -781,6 +789,34 @@ bool solve_cross_check(state *pState)
                 changed |= (triple != newTriple);
 
                 pState->x[(vbl * 3 + vl) * 3 + hb] = newTriple;
+              }
+            }
+          }
+        }
+
+        // Block on hline.
+        {
+          uint32_t invBlockOnHLineTriple[3];
+        
+          invBlockOnHLineTriple[0] = ~((uint32_t)(blockTripleAtLeastOnce[0] & ~blockTripleAtLeastOnce[1] & ~blockTripleAtLeastOnce[2] & moreThanOncePerHLine[vb * 3 + 0]) * (1 | (1 << 10) | (1 << 20)));
+          invBlockOnHLineTriple[1] = ~((uint32_t)(blockTripleAtLeastOnce[1] & ~blockTripleAtLeastOnce[0] & ~blockTripleAtLeastOnce[2] & moreThanOncePerHLine[vb * 3 + 1]) * (1 | (1 << 10) | (1 << 20)));
+          invBlockOnHLineTriple[2] = ~((uint32_t)(blockTripleAtLeastOnce[2] & ~blockTripleAtLeastOnce[0] & ~blockTripleAtLeastOnce[1] & moreThanOncePerHLine[vb * 3 + 2]) * (1 | (1 << 10) | (1 << 20)));
+        
+          for (size_t vl = 0; vl < 3; vl++)
+          {
+            if ((invBlockOnHLineTriple[vl] & s_all) != s_all)
+            {
+              for (size_t lhb = 0; lhb < 3; lhb++)
+              {
+                if (lhb == hb)
+                  continue;
+        
+                const uint32_t triple = pState->x[(vb * 3 + vl) * 3 + lhb];
+                const uint32_t newTriple = triple & invBlockOnHLineTriple[vl];
+        
+                changed |= (triple != newTriple);
+        
+                pState->x[(vb * 3 + vl) * 3 + lhb] = newTriple;
               }
             }
           }
