@@ -336,15 +336,8 @@ bool check(const state *pState)
   return true;
 }
 
-#include "io.h"
-
-#include <stdio.h>
-#include <inttypes.h>
-
 bool solve_cross_check(state *pState)
 {
-  static bool print_before_after = true;
-
   bool changed = false;
 
   uint16_t moreThanOncePerHLine[9];
@@ -828,7 +821,8 @@ bool solve_cross_check(state *pState)
   return changed;
 }
 
-void simple_solve(state *pState)
+template <bool advanced>
+void simple_solve_internal(state *pState)
 {
   uint8_t check_pattern = 0b111;
 
@@ -867,25 +861,44 @@ void simple_solve(state *pState)
       }
     }
 
-    if (!check_pattern)
+    if constexpr (advanced)
     {
-      if (pState->blocks == 0b111111111 || pState->lineH == 0b111111111)
-        break;
+      if (!check_pattern)
+      {
+        if (pState->blocks == 0b111111111 || pState->lineH == 0b111111111)
+          break;
 
-      if (solve_cross_check(pState))
-      {
-        recalc_done(pState);
-        check_pattern = 0b111;
+        if (solve_cross_check(pState))
+        {
+          recalc_done(pState);
+          check_pattern = 0b111;
+        }
+        else
+        {
+          break;
+        }
       }
-      else
-      {
+    }
+    else
+    {
+      if (!check_pattern)
         break;
-      }
     }
   }
 }
 
-bool checked_solve(state *pState)
+void simple_solve(state *pState)
+{
+  simple_solve_internal<false>(pState);
+}
+
+void simple_solve_advanced(state *pState)
+{
+  simple_solve_internal<true>(pState);
+}
+
+template <bool advanced>
+bool checked_solve_internal(state *pState)
 {
   uint8_t check_pattern = 0b111;
 
@@ -936,28 +949,46 @@ bool checked_solve(state *pState)
       }
     }
 
-    if (!check_pattern)
+    if constexpr (advanced)
     {
-      if (pState->blocks == 0b111111111 || pState->lineH == 0b111111111)
-        break;
-
-      if (solve_cross_check(pState))
+      if (!check_pattern)
       {
-        recalc_done(pState);
+        if (pState->blocks == 0b111111111 || pState->lineH == 0b111111111)
+          break;
 
-        if (!check_vlines(pState) || !check_hlines(pState) || !check(pState))
-          return false;
+        if (solve_cross_check(pState))
+        {
+          recalc_done(pState);
 
-        check_pattern = 0b111;
+          if (!check_vlines(pState) || !check_hlines(pState) || !check(pState))
+            return false;
+
+          check_pattern = 0b111;
+        }
+        else
+        {
+          break;
+        }
       }
-      else
-      {
+    }
+    else
+    {
+      if (!check_pattern)
         break;
-      }
     }
   }
 
   return true;
+}
+
+bool checked_solve(state *pState)
+{
+  return checked_solve_internal<false>(pState);
+}
+
+bool checked_solve_advanced(state *pState)
+{
+  return checked_solve_internal<true>(pState);
 }
 
 size_t find_lowest(state *pState, size_t *pSubIndex)
@@ -1020,7 +1051,8 @@ size_t find_lowest(state *pState, size_t *pSubIndex)
   return index;
 }
 
-bool recursive_guess(state *pState, size_t *pGuesses, size_t *pTotalGuesses)
+template <bool advanced>
+bool recursive_guess_internal(state *pState, size_t *pGuesses, size_t *pTotalGuesses)
 {
   if (pState->blocks == 0b111111111)
     return true;
@@ -1050,7 +1082,7 @@ bool recursive_guess(state *pState, size_t *pGuesses, size_t *pTotalGuesses)
 
     (*pTotalGuesses)++;
 
-    if (checked_solve(&s) && recursive_guess(&s, pGuesses, pTotalGuesses))
+    if (checked_solve_internal<advanced>(&s) && recursive_guess_internal<advanced>(&s, pGuesses, pTotalGuesses))
     {
       (*pGuesses)++;
       *pState = s;
@@ -1066,4 +1098,14 @@ bool recursive_guess(state *pState, size_t *pGuesses, size_t *pTotalGuesses)
   }
 
   return false;
+}
+
+bool recursive_guess(state *pState, size_t *pGuesses, size_t *pTotalGuesses)
+{
+  return recursive_guess_internal<false>(pState, pGuesses, pTotalGuesses);
+}
+
+bool recursive_guess_advanced(state *pState, size_t *pGuesses, size_t *pTotalGuesses)
+{
+  return recursive_guess_internal<true>(pState, pGuesses, pTotalGuesses);
 }
