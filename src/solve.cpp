@@ -336,74 +336,659 @@ bool check(const state *pState)
   return true;
 }
 
-void simple_solve(state *pState)
+bool solve_cross_check(state *pState)
 {
-  bool found = true;
+  bool changed = false;
 
-  while (found)
+  uint16_t moreThanOncePerHLine[9];
+  uint32_t moreThanOncePerHLineTriple[9];
+  uint32_t moreThanOncePerVLineTriple[3];
+
+  uint16_t digitAllowedMask = s_all;
+
+  // Vertical Line Setup.
   {
-    found = false;
-
-    if (solve_vlines(pState))
+    for (size_t hb = 0; hb < 3; hb++)
     {
-      recalc_done(pState);
-      found = true;
+      uint32_t atLeastOnce = 0;
+      uint32_t moreThanOnce = 0;
+
+      for (size_t l = 0; l < 9; l++)
+      {
+        const uint32_t triple = pState->x[l * 3 + hb];
+
+        moreThanOnce |= (atLeastOnce & triple);
+        atLeastOnce |= triple;
+      }
+
+      moreThanOncePerVLineTriple[hb] = moreThanOnce;
+    }
+  }
+
+  // Horizontal Line Setup.
+  {
+    uint16_t bit = 1;
+
+    for (size_t l = 0; l < 9; l++, bit <<= 1)
+    {
+      if (pState->lineH & bit)
+        continue;
+
+      uint32_t atLeastOnce = 0;
+      uint32_t moreThanOnce = 0;
+
+      for (size_t hb = 0; hb < 3; hb++)
+      {
+        const uint32_t triple = pState->x[l * 3 + hb];
+
+        moreThanOnce |= (atLeastOnce & triple);
+        atLeastOnce |= triple;
+      }
+
+      moreThanOncePerHLineTriple[l] = moreThanOnce;
+
+      const uint32_t t1 = (atLeastOnce >> 10);
+      const uint32_t t2 = (atLeastOnce >> 20);
+      moreThanOnce |= (atLeastOnce & t1) | (moreThanOnce >> 10);
+      atLeastOnce |= t1;
+      moreThanOnce |= (atLeastOnce & t2) | (moreThanOnce >> 20);
+
+      moreThanOncePerHLine[l] = (uint16_t)moreThanOnce & s_all;
+    }
+  }
+
+  for (size_t hblock = 0; hblock < 3; hblock++)
+  {
+    for (uint32_t vlineOffset = 0; vlineOffset < 21; vlineOffset += 10)
+    {
+      uint32_t vlineTriplePacked[3];
+      memset(&vlineTriplePacked, 0, sizeof(vlineTriplePacked));
+
+      // Turn hb into triples.
+      {
+        size_t l = 0;
+
+        for (size_t vblock = 0; vblock < 3; vblock++)
+          for (size_t sl_offset = 0; sl_offset < 21; sl_offset += 10, l++)
+            vlineTriplePacked[vblock] |= (((pState->x[l * 3 + hblock] >> vlineOffset) & s_all) << sl_offset);
+      }
+
+      const uint32_t currentVLineMoreThanOnce = (moreThanOncePerVLineTriple[hblock] >> vlineOffset) & digitAllowedMask;
+      uint32_t digitCandidateMask = currentVLineMoreThanOnce >> 1;
+      uint32_t currentDigit = 0;
+
+      while (digitCandidateMask)
+      {
+        DWORD bitIndex;
+        BitScanForward(&bitIndex, digitCandidateMask);
+        currentDigit += (bitIndex + 1);
+        digitCandidateMask >>= (bitIndex + 1);
+
+        const uint32_t digitMaskTriple0 = 1 << currentDigit;
+        const uint32_t digitMaskTriple1 = digitMaskTriple0 << 10;
+        const uint32_t digitMaskTriple2 = digitMaskTriple0 << 20;
+        const uint32_t digitMaskAllTriples = digitMaskTriple0 | digitMaskTriple1 | digitMaskTriple2;
+
+        uint8_t digitsPerHLineCount[9];
+        uint16_t digitsPerHLineCount_HLineMasks[9];
+        uint16_t digitsInHLineBitMask[9];
+        memset(&digitsPerHLineCount, 0, sizeof(digitsPerHLineCount));
+        memset(&digitsPerHLineCount_HLineMasks, 0, sizeof(digitsPerHLineCount_HLineMasks));
+        memset(&digitsInHLineBitMask, 0, sizeof(digitsInHLineBitMask));
+
+        // for each hline, how many match this digit.
+        {
+          uint32_t hline_bit = 1;
+
+          for (size_t hline = 0; hline < 9; hline++, hline_bit <<= 1)
+          {
+            if (pState->lineH & hline_bit)
+              continue;
+
+            if (moreThanOncePerHLine[hline] & currentVLineMoreThanOnce)
+            {
+              size_t digitsinCurrentHLine = 0;
+
+              for (size_t hb = 0; hb < 3; hb++)
+              {
+                const uint32_t triple = pState->x[hline * 3 + hb];
+                digitsinCurrentHLine += __popcnt64(triple & digitMaskAllTriples);
+                digitsInHLineBitMask[hline] |= (!!(triple & digitMaskTriple0) | (!!(triple & digitMaskTriple1) << 1) | (!!(triple & digitMaskTriple2) << 2)) << (hb * 3);
+              }
+
+              digitsPerHLineCount[digitsinCurrentHLine]++;
+              digitsPerHLineCount_HLineMasks[digitsinCurrentHLine] |= hline_bit;
+            }
+          }
+
+          // DEBUG_ASSERT(digitsPerHLineCount[0] == 0); // this can be triggered in `checked_solve` for some reason. but we're trying to fail there...
+        }
+
+        uint8_t involvedDigitsCount = 0;
+        uint16_t involvedHLinePositionMask = 0;
+
+        for (size_t i = 2; i < 9; i++) // with 1, 9 there'd be nothing to eliminate. 0 would be invalid anyways.
+        {
+          involvedDigitsCount += digitsPerHLineCount[i];
+          involvedHLinePositionMask |= digitsPerHLineCount_HLineMasks[i];
+
+          if (involvedDigitsCount < i) // There can now technically be n with x >= 2 same.
+            continue;
+
+          uint16_t involvedHLinePositionMaskRemaining = involvedHLinePositionMask;
+          size_t currentHLineIndex = (size_t)-1;
+
+          while (involvedHLinePositionMaskRemaining)
+          {
+            BitScanForward(&bitIndex, involvedHLinePositionMaskRemaining);
+            currentHLineIndex += (bitIndex + 1);
+            involvedHLinePositionMaskRemaining >>= (bitIndex + 1);
+
+            if (__popcnt64(involvedHLinePositionMaskRemaining) + 1 < i)
+              break; // not enough matches left to find vl matching.
+
+            if (__popcnt64(digitsInHLineBitMask[currentHLineIndex]) != i)
+              continue; // this one doesn't actually contain vl, so we better find a better one to compare with.
+
+            uint16_t possibleMatchingHLinePositionsMask = involvedHLinePositionMaskRemaining;
+            size_t comparedHLineIndex = currentHLineIndex;
+
+            const uint32_t currentHLineDigitBitMask = digitsInHLineBitMask[currentHLineIndex];
+            uint32_t matchingHLinesBitMask = 1 << currentHLineIndex;
+
+            while (possibleMatchingHLinePositionsMask)
+            {
+              BitScanForward(&bitIndex, possibleMatchingHLinePositionsMask);
+              comparedHLineIndex += (bitIndex + 1);
+              possibleMatchingHLinePositionsMask >>= (bitIndex + 1);
+
+              const size_t currentWithComparedHLineMatches = __popcnt64(digitsInHLineBitMask[comparedHLineIndex] & currentHLineDigitBitMask);
+              const size_t availablePossibilitiesPerComparedLine = __popcnt64(digitsInHLineBitMask[comparedHLineIndex]);
+
+              matchingHLinesBitMask |= ((!!(currentWithComparedHLineMatches == availablePossibilitiesPerComparedLine)) << comparedHLineIndex);
+            }
+
+            if (__popcnt64(matchingHLinesBitMask) >= i) // we found >= vl matching lines!
+            {
+              uint32_t matchedHLineDigitsRemaining = currentHLineDigitBitMask;
+              size_t currentMatchedHLineIndex = (size_t)-1;
+
+              const uint32_t currentDigitMask = (1 << currentDigit) * (1 | (1 << 10) | (1 << 20));
+
+              // Purge everything else in all matching lines.
+              while (matchedHLineDigitsRemaining)
+              {
+                BitScanForward(&bitIndex, matchedHLineDigitsRemaining);
+                currentMatchedHLineIndex += (bitIndex + 1);
+                matchedHLineDigitsRemaining >>= (bitIndex + 1);
+
+                const size_t currentMatchedHLineOffset = currentMatchedHLineIndex / 3;
+                const size_t currentMatchedHLineTripleOffset = currentMatchedHLineIndex % 3;
+                const uint32_t currentMatchedHLineTripleMask = s_all << (10 * currentMatchedHLineTripleOffset);
+                const uint32_t digitInMatchedHLineTripleMask = ~(currentDigitMask & currentMatchedHLineTripleMask);
+
+                uint32_t nonContainedVLinesRemainingBitMask = (~matchingHLinesBitMask & 0b111111111); // these are lines!
+                uint32_t nonContainedVLineIndex = (uint32_t)-1;
+
+                while (nonContainedVLinesRemainingBitMask)
+                {
+                  BitScanForward(&bitIndex, nonContainedVLinesRemainingBitMask);
+                  nonContainedVLineIndex += (bitIndex + 1);
+                  nonContainedVLinesRemainingBitMask >>= (bitIndex + 1);
+
+                  const uint32_t triple = pState->x[nonContainedVLineIndex * 3 + currentMatchedHLineOffset];
+                  const uint32_t newTriple = triple & digitInMatchedHLineTripleMask;
+
+                  changed |= newTriple != triple;
+
+                  pState->x[nonContainedVLineIndex * 3 + currentMatchedHLineOffset] = newTriple;
+                }
+              }
+
+              digitAllowedMask &= ~(uint16_t)(1 << currentDigit);
+
+              goto next_candidate_vline;
+            }
+          }
+        }
+
+      next_candidate_vline:;
+      }
+    }
+  }
+
+  for (size_t hline = 0; hline < 9; hline++)
+  {
+    const uint32_t currentHLineMoreThanOnce = moreThanOncePerHLine[hline] & digitAllowedMask;
+    uint32_t digitCandidateMask = currentHLineMoreThanOnce >> 1;
+    uint32_t currentDigit = 0;
+
+    while (digitCandidateMask)
+    {
+      DWORD bitIndex;
+      BitScanForward(&bitIndex, digitCandidateMask);
+      currentDigit += (bitIndex + 1);
+      digitCandidateMask >>= (bitIndex + 1);
+
+      const uint32_t digitMaskTriple0 = 1 << currentDigit;
+      const uint32_t digitMaskTriple1 = digitMaskTriple0 << 10;
+      const uint32_t digitMaskTriple2 = digitMaskTriple0 << 20;
+      const uint32_t digitMaskAllTriples = digitMaskTriple0 | digitMaskTriple1 | digitMaskTriple2;
+
+      uint8_t digitsPerVLineCount[9];
+      uint16_t digitsPerVLineCount_VLineMasks[9];
+      uint16_t digitsInVLineBitMask[9];
+      memset(&digitsPerVLineCount, 0, sizeof(digitsPerVLineCount));
+      memset(&digitsPerVLineCount_VLineMasks, 0, sizeof(digitsPerVLineCount_VLineMasks));
+      memset(&digitsInVLineBitMask, 0, sizeof(digitsInVLineBitMask));
+
+      // for each vline, how many match this digit.
+      {
+        for (size_t hb = 0; hb < 3; hb++)
+        {
+          if (moreThanOncePerVLineTriple[hb] & currentHLineMoreThanOnce)
+          {
+            size_t digitsInCurrentVLine_0 = 0;
+            size_t digitsInCurrentVLine_1 = 0;
+            size_t digitsInCurrentVLine_2 = 0;
+
+            for (size_t vl = 0; vl < 9; vl++)
+            {
+              const uint32_t triple = pState->x[vl * 3 + hb];
+              const uint32_t tripleDigits = triple & digitMaskAllTriples;
+              const uint32_t tripleDigits_0 = tripleDigits & s_all;
+              const uint32_t tripleDigits_1 = (tripleDigits >> 10) & s_all;
+              const uint32_t tripleDigits_2 = (tripleDigits >> 20) & s_all;
+
+              digitsInCurrentVLine_0 += __popcnt64(tripleDigits_0);
+              digitsInCurrentVLine_1 += __popcnt64(tripleDigits_1);
+              digitsInCurrentVLine_2 += __popcnt64(tripleDigits_2);
+
+              digitsInVLineBitMask[hb * 3 + 0] |= !!(tripleDigits_0) << vl;
+              digitsInVLineBitMask[hb * 3 + 1] |= !!(tripleDigits_1) << vl;
+              digitsInVLineBitMask[hb * 3 + 2] |= !!(tripleDigits_2) << vl;
+            }
+
+            digitsPerVLineCount[digitsInCurrentVLine_0]++;
+            digitsPerVLineCount[digitsInCurrentVLine_1]++;
+            digitsPerVLineCount[digitsInCurrentVLine_2]++;
+
+            digitsPerVLineCount_VLineMasks[digitsInCurrentVLine_0] |= (1 << (hb * 3 + 0));
+            digitsPerVLineCount_VLineMasks[digitsInCurrentVLine_1] |= (1 << (hb * 3 + 1));
+            digitsPerVLineCount_VLineMasks[digitsInCurrentVLine_2] |= (1 << (hb * 3 + 2));
+          }
+        }
+
+        DEBUG_ASSERT(digitsPerVLineCount[0] == 0);
+      }
+
+      uint8_t involvedDigitsCount = 0;
+      uint16_t involvedVLinePositionMask = 0;
+
+      for (size_t i = 2; i < 9; i++) // with 1, 9 there'd be nothing to eliminate. 0 would be invalid anyways.
+      {
+        involvedDigitsCount += digitsPerVLineCount[i];
+        involvedVLinePositionMask |= digitsPerVLineCount_VLineMasks[i];
+
+        if (involvedDigitsCount < i) // There can now technically be n with x >= 2 same.
+          continue;
+
+        uint16_t involvedVLinePositionMaskRemaining = involvedVLinePositionMask;
+        size_t currentVLineIndex = (size_t)-1;
+
+        while (involvedVLinePositionMaskRemaining)
+        {
+          BitScanForward(&bitIndex, involvedVLinePositionMaskRemaining);
+          currentVLineIndex += (bitIndex + 1);
+          involvedVLinePositionMaskRemaining >>= (bitIndex + 1);
+
+          if (__popcnt64(involvedVLinePositionMaskRemaining) + 1 < i)
+            break; // not enough matches left to find vl matching.
+
+          if (__popcnt64(digitsInVLineBitMask[currentVLineIndex]) != i)
+            continue; // this one doesn't actually contain vl, so we better find a better one to compare with.
+
+          uint16_t possibleMatchingVLinePositionsMask = involvedVLinePositionMaskRemaining;
+          size_t comparedVLineIndex = currentVLineIndex;
+
+          const uint32_t currentVLineDigitBitMask = digitsInVLineBitMask[currentVLineIndex];
+          uint32_t matchingVLinesBitMask = 1 << currentVLineIndex;
+
+          while (possibleMatchingVLinePositionsMask)
+          {
+            BitScanForward(&bitIndex, possibleMatchingVLinePositionsMask);
+            comparedVLineIndex += (bitIndex + 1);
+            possibleMatchingVLinePositionsMask >>= (bitIndex + 1);
+
+            const size_t currentWithComparedVLineMatches = __popcnt64(digitsInVLineBitMask[comparedVLineIndex] & currentVLineDigitBitMask);
+            const size_t availablePossibilitiesPerComparedLine = __popcnt64(digitsInVLineBitMask[comparedVLineIndex]);
+
+            matchingVLinesBitMask |= ((!!(currentWithComparedVLineMatches == availablePossibilitiesPerComparedLine)) << comparedVLineIndex);
+          }
+
+          if (__popcnt64(matchingVLinesBitMask) >= i) // we found >= vl matching lines!
+          {
+            uint32_t matchedVLineDigitsRemaining = currentVLineDigitBitMask;
+            size_t currentMatchedVLineIndex = (size_t)-1;
+
+            const uint32_t currentDigitInverseTripleMask = (~(1 << currentDigit) & (s_all | s_done)) * (1 | (1 << 10) | (1 << 20));
+
+            const uint32_t hlineDigitBits_0 = ((matchingVLinesBitMask & 0b1) | ((matchingVLinesBitMask & 0b10) << (10 - 1)) | ((matchingVLinesBitMask & 0b100) << (20 - 2))) << currentDigit;
+            const uint32_t hlineDigitBits_1 = (((matchingVLinesBitMask & 0b1000) >> 3) | ((matchingVLinesBitMask & 0b10000) << (10 - 4)) | ((matchingVLinesBitMask & 0b100000) << (20 - 5))) << currentDigit;
+            const uint32_t hlineDigitBits_2 = (((matchingVLinesBitMask & 0b1000000) >> 6) | ((matchingVLinesBitMask & 0b10000000) << (10 - 7)) | ((matchingVLinesBitMask & 0b100000000) << (20 - 8))) << currentDigit;
+
+            const uint32_t hlineMask_0 = currentDigitInverseTripleMask | hlineDigitBits_0;
+            const uint32_t hlineMask_1 = currentDigitInverseTripleMask | hlineDigitBits_1;
+            const uint32_t hlineMask_2 = currentDigitInverseTripleMask | hlineDigitBits_2;
+
+            // Purge everything else in all matching lines.
+            while (matchedVLineDigitsRemaining)
+            {
+              BitScanForward(&bitIndex, matchedVLineDigitsRemaining);
+              currentMatchedVLineIndex += (bitIndex + 1);
+              matchedVLineDigitsRemaining >>= (bitIndex + 1);
+
+              const uint32_t triple0 = pState->x[currentMatchedVLineIndex * 3 + 0];
+              const uint32_t triple1 = pState->x[currentMatchedVLineIndex * 3 + 1];
+              const uint32_t triple2 = pState->x[currentMatchedVLineIndex * 3 + 2];
+
+              const uint32_t newTriple0 = triple0 & hlineMask_0;
+              const uint32_t newTriple1 = triple1 & hlineMask_1;
+              const uint32_t newTriple2 = triple2 & hlineMask_2;
+
+              changed |= (newTriple0 != triple0) | (newTriple1 != triple1) | (newTriple2 != triple2);
+
+              pState->x[currentMatchedVLineIndex * 3 + 0] = newTriple0;
+              pState->x[currentMatchedVLineIndex * 3 + 1] = newTriple1;
+              pState->x[currentMatchedVLineIndex * 3 + 2] = newTriple2;
+            }
+
+            digitAllowedMask &= ~(uint16_t)(1 << currentDigit);
+          }
+
+          goto next_candidate_hline;
+        }
+      }
+
+    next_candidate_hline:;
+    }
+  }
+
+  // block on hline/vline.
+  {
+    uint16_t bit = 1;
+    uint16_t blockIndex = 0;
+
+    for (size_t vb = 0; vb < 3; vb++)
+    {
+      for (size_t hb = 0; hb < 3; hb++, bit <<= 1, blockIndex++)
+      {
+        if (pState->blocks & bit)
+          continue;
+
+        uint32_t atLeastOnce = 0;
+        uint32_t moreThanOnce = 0;
+        uint16_t blockTripleAtLeastOnce[3];
+        uint16_t blockTripleMoreThanOnce[3];
+
+        for (size_t vt = 0; vt < 3; vt++)
+        {
+          const uint32_t triple = pState->x[vb * 9 + hb + vt * 3];
+
+          moreThanOnce |= (atLeastOnce & triple);
+          atLeastOnce |= triple;
+
+          const uint32_t _1 = triple >> 10;
+          const uint32_t _2 = triple >> 20;
+
+          uint32_t atLeastOnceTriple = triple | _1;
+          uint32_t moreThanOnceTriple = triple & _1;
+          moreThanOnceTriple |= (atLeastOnceTriple & _2);
+          atLeastOnceTriple |= _2;
+
+          blockTripleAtLeastOnce[vt] = (uint16_t)(atLeastOnceTriple & s_all);
+          blockTripleMoreThanOnce[vt] = (uint16_t)(moreThanOnceTriple & s_all);
+        }
+
+        const uint32_t atLeastOncePerBlockTriple = atLeastOnce;
+
+        const uint32_t t1 = (atLeastOnce >> 10);
+        const uint32_t t2 = (atLeastOnce >> 20);
+        moreThanOnce |= (atLeastOnce & t1) | (moreThanOnce >> 10);
+        atLeastOnce |= t1;
+        moreThanOnce |= (atLeastOnce & t2) | (moreThanOnce >> 20);
+
+        // Block on vline.
+        {
+          const uint32_t atLeastOncePerBlockTripleRot1 = (atLeastOncePerBlockTriple >> 10) | (atLeastOncePerBlockTriple << 20);
+          const uint32_t atLeastOncePerBlockTripleRot2 = (atLeastOncePerBlockTripleRot1 >> 10) | (atLeastOncePerBlockTripleRot1 << 20);
+          
+          // we can handle digits not being "allowed", unlike earlier loops.
+          const uint32_t blockTripleOnVLineTriple = (atLeastOncePerBlockTriple & ~atLeastOncePerBlockTripleRot1 & ~atLeastOncePerBlockTripleRot2 & moreThanOncePerVLineTriple[hb]) & (s_all | (s_all << 10) | (s_all << 20));
+          const uint32_t invBlockTripleOnVlineTriple = ~blockTripleOnVLineTriple;
+
+          if (blockTripleOnVLineTriple)
+          {
+            for (size_t vbl = 0; vbl < 3; vbl++)
+            {
+              if (vbl == vb)
+                continue;
+
+              for (size_t vl = 0; vl < 3; vl++)
+              {
+                const uint32_t triple = pState->x[(vbl * 3 + vl) * 3 + hb];
+                const uint32_t newTriple = triple & invBlockTripleOnVlineTriple;
+
+                changed |= (triple != newTriple);
+
+                pState->x[(vbl * 3 + vl) * 3 + hb] = newTriple;
+              }
+            }
+          }
+        }
+
+        // Block on hline.
+        {
+          uint32_t invBlockOnHLineTriple[3];
+        
+          invBlockOnHLineTriple[0] = ~((uint32_t)(blockTripleAtLeastOnce[0] & ~blockTripleAtLeastOnce[1] & ~blockTripleAtLeastOnce[2] & moreThanOncePerHLine[vb * 3 + 0]) * (1 | (1 << 10) | (1 << 20)));
+          invBlockOnHLineTriple[1] = ~((uint32_t)(blockTripleAtLeastOnce[1] & ~blockTripleAtLeastOnce[0] & ~blockTripleAtLeastOnce[2] & moreThanOncePerHLine[vb * 3 + 1]) * (1 | (1 << 10) | (1 << 20)));
+          invBlockOnHLineTriple[2] = ~((uint32_t)(blockTripleAtLeastOnce[2] & ~blockTripleAtLeastOnce[0] & ~blockTripleAtLeastOnce[1] & moreThanOncePerHLine[vb * 3 + 2]) * (1 | (1 << 10) | (1 << 20)));
+        
+          for (size_t vl = 0; vl < 3; vl++)
+          {
+            if ((invBlockOnHLineTriple[vl] & s_all) != s_all)
+            {
+              for (size_t lhb = 0; lhb < 3; lhb++)
+              {
+                if (lhb == hb)
+                  continue;
+        
+                const uint32_t triple = pState->x[(vb * 3 + vl) * 3 + lhb];
+                const uint32_t newTriple = triple & invBlockOnHLineTriple[vl];
+        
+                changed |= (triple != newTriple);
+        
+                pState->x[(vb * 3 + vl) * 3 + lhb] = newTriple;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return changed;
+}
+
+template <bool advanced>
+void simple_solve_internal(state *pState)
+{
+  uint8_t check_pattern = 0b111;
+
+  while (true)
+  {
+    if (check_pattern & 0b001)
+    {
+      check_pattern &= 0b110;
+
+      if (solve_vlines(pState))
+      {
+        recalc_done(pState);
+        check_pattern = 0b110;
+      }
     }
 
-    if (solve_hlines(pState))
+    if (check_pattern & 0b010)
     {
-      recalc_done(pState);
-      found = true;
+      check_pattern &= 0b101;
+
+      if (solve_hlines(pState))
+      {
+        recalc_done(pState);
+        check_pattern = 0b101;
+      }
     }
 
-    if (solve_blocks(pState))
+    if (check_pattern & 0b100)
     {
-      recalc_done(pState);
-      found = true;
+      check_pattern &= 0b001;
+
+      if (solve_blocks(pState))
+      {
+        recalc_done(pState);
+        check_pattern = 0b011;
+      }
+    }
+
+    if constexpr (advanced)
+    {
+      if (!check_pattern)
+      {
+        if (pState->blocks == 0b111111111 || pState->lineH == 0b111111111)
+          break;
+
+        if (solve_cross_check(pState))
+        {
+          recalc_done(pState);
+          check_pattern = 0b111;
+        }
+        else
+        {
+          break;
+        }
+      }
+    }
+    else
+    {
+      if (!check_pattern)
+        break;
     }
   }
 }
 
-bool checked_solve(state *pState)
+void simple_solve(state *pState)
 {
-  bool found = true;
+  simple_solve_internal<false>(pState);
+}
 
-  while (found)
+void simple_solve_advanced(state *pState)
+{
+  simple_solve_internal<true>(pState);
+}
+
+template <bool advanced>
+bool checked_solve_internal(state *pState)
+{
+  uint8_t check_pattern = 0b111;
+
+  while (check_pattern)
   {
-    found = false;
-
-    if (solve_vlines(pState))
+    if (check_pattern & 0b001)
     {
-      recalc_done(pState);
+      check_pattern &= 0b110;
 
-      if (!check_blocks(pState) || !check_hlines(pState) || !check(pState))
-        return false;
+      if (solve_vlines(pState))
+      {
+        recalc_done(pState);
 
-      found = true;
+        if (!check_blocks(pState) || !check_hlines(pState) || !check(pState))
+          return false;
+
+        check_pattern = 0b110;
+      }
     }
 
-    if (solve_hlines(pState))
+    if (check_pattern & 0b010)
     {
-      recalc_done(pState);
+      check_pattern &= 0b101;
 
-      if (!check_blocks(pState) || !check_vlines(pState) || !check(pState))
-        return false;
+      if (solve_hlines(pState))
+      {
+        recalc_done(pState);
 
-      found = true;
+        if (!check_blocks(pState) || !check_vlines(pState) || !check(pState))
+          return false;
+
+        check_pattern = 0b101;
+      }
     }
 
-    if (solve_blocks(pState))
+    if (check_pattern & 0b100)
     {
-      recalc_done(pState);
+      check_pattern &= 0b011;
 
-      if (!check_vlines(pState) || !check_hlines(pState) || !check(pState))
-        return false;
+      if (solve_blocks(pState))
+      {
+        recalc_done(pState);
 
-      found = true;
+        if (!check_vlines(pState) || !check_hlines(pState) || !check(pState))
+          return false;
+
+        check_pattern = 0b011;
+      }
+    }
+
+    if constexpr (advanced)
+    {
+      if (!check_pattern)
+      {
+        if (pState->blocks == 0b111111111 || pState->lineH == 0b111111111)
+          break;
+
+        if (solve_cross_check(pState))
+        {
+          recalc_done(pState);
+
+          if (!check_vlines(pState) || !check_hlines(pState) || !check(pState))
+            return false;
+
+          check_pattern = 0b111;
+        }
+        else
+        {
+          break;
+        }
+      }
+    }
+    else
+    {
+      if (!check_pattern)
+        break;
     }
   }
 
   return true;
+}
+
+bool checked_solve(state *pState)
+{
+  return checked_solve_internal<false>(pState);
+}
+
+bool checked_solve_advanced(state *pState)
+{
+  return checked_solve_internal<true>(pState);
 }
 
 size_t find_lowest(state *pState, size_t *pSubIndex)
@@ -466,7 +1051,8 @@ size_t find_lowest(state *pState, size_t *pSubIndex)
   return index;
 }
 
-bool recursive_guess(state *pState, size_t *pGuesses, size_t *pTotalGuesses)
+template <bool advanced>
+bool recursive_guess_internal(state *pState, size_t *pGuesses, size_t *pTotalGuesses)
 {
   if (pState->blocks == 0b111111111)
     return true;
@@ -496,7 +1082,7 @@ bool recursive_guess(state *pState, size_t *pGuesses, size_t *pTotalGuesses)
 
     (*pTotalGuesses)++;
 
-    if (checked_solve(&s) && recursive_guess(&s, pGuesses, pTotalGuesses))
+    if (checked_solve_internal<advanced>(&s) && recursive_guess_internal<advanced>(&s, pGuesses, pTotalGuesses))
     {
       (*pGuesses)++;
       *pState = s;
@@ -512,4 +1098,14 @@ bool recursive_guess(state *pState, size_t *pGuesses, size_t *pTotalGuesses)
   }
 
   return false;
+}
+
+bool recursive_guess(state *pState, size_t *pGuesses, size_t *pTotalGuesses)
+{
+  return recursive_guess_internal<false>(pState, pGuesses, pTotalGuesses);
+}
+
+bool recursive_guess_advanced(state *pState, size_t *pGuesses, size_t *pTotalGuesses)
+{
+  return recursive_guess_internal<true>(pState, pGuesses, pTotalGuesses);
 }

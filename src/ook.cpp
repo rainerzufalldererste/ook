@@ -38,10 +38,52 @@ void init(state *pState)
 }
 
 static const char _Arg_Benchmark[] = "--bench";
+static const char _Arg_PreferPreSolve[] = "--prefer-pre-solve";
+static const char _Arg_PreferGuessSolve[] = "--prefer-guess-solve";
 
 int32_t main(const int32_t argc, char **ppArgv)
 {
-  ERROR_IF(argc <= 1, "Usage: ook <filename> [--bench]");
+  bool benchmark = false;
+  bool preferPreSolve = false;
+  bool preferGuessSolve = false;
+
+  if (argc <= 1)
+  {
+    puts("Usage: ook <filename>");
+    printf("\t[ % 25s ]: \tRun Benchmark\n", _Arg_Benchmark);
+    printf("\t[ % 25s ]: \tPrefer Advanced Solver before guessing Values\n", _Arg_PreferPreSolve);
+    printf("\t[ % 25s ]: \tPrefer Advanced Solver when guessing Values\n", _Arg_PreferGuessSolve);
+
+    return EXIT_FAILURE;
+  }
+
+  int32_t argIndex = 2;
+
+  while (argIndex < argc)
+  {
+    const int32_t argsLeft = argc - argIndex;
+    (void)argsLeft; // currently none of the arguments have additional parameters.
+
+    if (strncmp(ppArgv[argIndex], _Arg_Benchmark, sizeof(_Arg_Benchmark)) == 0)
+    {
+      benchmark = true;
+    }
+    else if (strncmp(ppArgv[argIndex], _Arg_PreferPreSolve, sizeof(_Arg_PreferPreSolve)) == 0)
+    {
+      preferPreSolve = true;
+    }
+    else if (strncmp(ppArgv[argIndex], _Arg_PreferGuessSolve, sizeof(_Arg_PreferGuessSolve)) == 0)
+    {
+      preferGuessSolve = true;
+    }
+    else
+    {
+      printf("Invalid Argument'%s'. Aborting.\n", ppArgv[argIndex]);
+      return EXIT_FAILURE;
+    }
+
+    argIndex++;
+  }
 
   state s;
   init(&s);
@@ -62,19 +104,19 @@ int32_t main(const int32_t argc, char **ppArgv)
 
   print(&s);
 
-  if (argc > 2 && strncmp(ppArgv[2], _Arg_Benchmark, sizeof(_Arg_Benchmark)) == 0)
+  if (benchmark)
   {
     // Dry Run.
     {
       puts("Dry Run...");
 
       state s1 = s;
-      simple_solve(&s1);
+      (preferPreSolve ? simple_solve_advanced : simple_solve)(&s1);
 
       if (s1.blocks != 0b111111111)
       {
         size_t _0, _1;
-        recursive_guess(&s1, &_0, &_1);
+        (preferGuessSolve ? recursive_guess_advanced : recursive_guess)(&s1, &_0, &_1);
       }
     }
 
@@ -98,12 +140,12 @@ int32_t main(const int32_t argc, char **ppArgv)
       for (size_t i = 0; i < 1000; i++)
       {
         state s1 = s;
-        simple_solve(&s1);
+        (preferPreSolve ? simple_solve_advanced : simple_solve)(&s1);
 
         if (s1.blocks != 0b111111111)
         {
           size_t _0, _1;
-          recursive_guess(&s1, &_0, &_1);
+          (preferGuessSolve ? recursive_guess_advanced : recursive_guess)(&s1, &_0, &_1);
         }
       }
 
@@ -154,7 +196,7 @@ int32_t main(const int32_t argc, char **ppArgv)
       fputs("Simple Solve...", stdout);
 
       const uint64_t before = _get_ticks();
-      simple_solve(&s);
+      (preferPreSolve ? simple_solve_advanced : simple_solve)(&s);
       const uint64_t after = _get_ticks();
 
       printf(" (Completed in %9.6f ms)\n", _ticks_to_ns(after - before) * 1e-6f);
@@ -175,7 +217,7 @@ int32_t main(const int32_t argc, char **ppArgv)
       const uint64_t before = _get_ticks();
 
       size_t guesses = 0, total = 0;
-      ERROR_IF(!recursive_guess(&s, &guesses, &total), "Failed to solve by guessing.");
+      ERROR_IF(!(preferGuessSolve ? recursive_guess_advanced : recursive_guess)(&s, &guesses, &total), "Failed to solve by guessing.");
 
       const uint64_t after = _get_ticks();
 

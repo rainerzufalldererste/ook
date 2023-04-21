@@ -217,3 +217,61 @@ void print_state(const state *pState)
       fputs("- ----:-----:-----|-----:-----:-----|-----:-----:----\n", stdout);
   }
 }
+
+void inspect_triple_value_internal(const uint32_t value)
+{
+  fputc(value & s_done ? '!' : ' ', stdout);
+ 
+  for (uint8_t i = 1; i <= 9; i++)
+  {
+    if (value & (1 << i))
+      fputc('0' + i, stdout);
+    else
+      fputc('.', stdout);
+  }
+}
+
+void inspect_triple_value(const uint32_t value)
+{
+  inspect_triple_value_internal(value);
+  puts("");
+}
+
+void inspect_triple(const uint32_t triple)
+{
+  size_t tripleIndex = 0;
+
+  fputs("[ ", stdout);
+
+  for (size_t offset = 0; offset < 21; offset += 10, tripleIndex++)
+  {
+    if (offset > 0)
+      fputs("  |  ", stdout);
+
+    printf("%" PRIu64 ": ", tripleIndex);
+    inspect_triple_value_internal(triple >> offset);
+  }
+
+  puts(" ]");
+}
+
+void inspect_bits(const uint64_t value)
+{
+  uint64_t v = value;
+
+  for (size_t i = 0; i < 64; i++, v >>= 1)
+  {
+    if (v == 0)
+    {
+      fputc('/', stdout);
+      break;
+    }
+
+    if (v & 1)
+      printf("%" PRIX64 " ", i);
+    else
+      fputs(". ", stdout);
+  }
+
+  puts("");
+}

@@ -18,4 +18,8 @@ bool check(const state *pState);
 void simple_solve(state *pState);
 bool checked_solve(state *pState);
 
+void simple_solve_advanced(state *pState);
+bool checked_solve_advanced(state *pState);
+
 bool recursive_guess(state *pState, size_t *pGuesses, size_t *pTotalGuesses);
+bool recursive_guess_advanced(state *pState, size_t *pGuesses, size_t *pTotalGuesses);
