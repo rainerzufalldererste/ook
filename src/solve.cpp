@@ -343,10 +343,16 @@ bool check(const state *pState)
 
 bool solve_cross_check(state *pState)
 {
+  static bool print_before_after = false;
+
+  if (print_before_after)
+  {
+    puts("\nBefore:");
+    print_state(pState);
+  }
+
   bool changed = false;
 
-  uint16_t moreThanOncePerBlock[9];
-  uint32_t moreThanOncePerBlockTriple[9];
   uint16_t moreThanOncePerHLine[9];
   uint32_t moreThanOncePerHLineTriple[9];
   uint32_t moreThanOncePerVLineTriple[3];
@@ -401,42 +407,6 @@ bool solve_cross_check(state *pState)
       moreThanOnce |= (atLeastOnce & t2) | (moreThanOnce >> 20);
 
       moreThanOncePerHLine[l] = (uint16_t)moreThanOnce & s_all;
-    }
-  }
-
-  // Block Setup.
-  {
-    uint16_t bit = 1;
-    uint16_t blockIndex = 0;
-
-    for (size_t vb = 0; vb < 3; vb++)
-    {
-      for (size_t hb = 0; hb < 3; hb++, bit <<= 1, blockIndex++)
-      {
-        if (pState->blocks & bit)
-          continue;
-
-        uint32_t atLeastOnce = 0;
-        uint32_t moreThanOnce = 0;
-
-        for (size_t vt = 0; vt < 3; vt++)
-        {
-          const uint32_t triple = pState->x[vb * 9 + hb + vt * 3];
-
-          moreThanOnce |= (atLeastOnce & triple);
-          atLeastOnce |= triple;
-        }
-
-        moreThanOncePerBlockTriple[blockIndex] = moreThanOnce;
-
-        const uint32_t t1 = (atLeastOnce >> 10);
-        const uint32_t t2 = (atLeastOnce >> 20);
-        moreThanOnce |= (atLeastOnce & t1) | (moreThanOnce >> 10);
-        atLeastOnce |= t1;
-        moreThanOnce |= (atLeastOnce & t2) | (moreThanOnce >> 20);
-
-        moreThanOncePerBlock[blockIndex] = (uint16_t)moreThanOnce & s_all;
-      }
     }
   }
 
@@ -754,6 +724,68 @@ bool solve_cross_check(state *pState)
       }
 
     next_candidate_hline:;
+    }
+  }
+
+  // block on hline/vline.
+  {
+    uint16_t bit = 1;
+    uint16_t blockIndex = 0;
+
+    for (size_t vb = 0; vb < 3; vb++)
+    {
+      for (size_t hb = 0; hb < 3; hb++, bit <<= 1, blockIndex++)
+      {
+        if (pState->blocks & bit)
+          continue;
+
+        uint32_t atLeastOnce = 0;
+        uint32_t moreThanOnce = 0;
+
+        for (size_t vt = 0; vt < 3; vt++)
+        {
+          const uint32_t triple = pState->x[vb * 9 + hb + vt * 3];
+
+          moreThanOnce |= (atLeastOnce & triple);
+          atLeastOnce |= triple;
+        }
+
+        const uint32_t atLeastOncePerBlockTriple = atLeastOnce;
+
+        const uint32_t t1 = (atLeastOnce >> 10);
+        const uint32_t t2 = (atLeastOnce >> 20);
+        moreThanOnce |= (atLeastOnce & t1) | (moreThanOnce >> 10);
+        atLeastOnce |= t1;
+        moreThanOnce |= (atLeastOnce & t2) | (moreThanOnce >> 20);
+
+        // Block on vline.
+        {
+          const uint32_t atLeastOncePerBlockTripleRot1 = (atLeastOncePerBlockTriple >> 10) | (atLeastOncePerBlockTriple << 20);
+          const uint32_t atLeastOncePerBlockTripleRot2 = (atLeastOncePerBlockTripleRot1 >> 10) | (atLeastOncePerBlockTripleRot1 << 20);
+
+          const uint32_t blockTripleOnVLineTriple = atLeastOncePerBlockTriple & ~atLeastOncePerBlockTripleRot1 & ~atLeastOncePerBlockTripleRot2 & moreThanOncePerVLineTriple[hb]; // we can handle digits not being "allowed", unlike earlier loops.
+          const uint32_t invBlockTripleOnVlineTriple = ~blockTripleOnVLineTriple | (s_done | (s_done << 10) | (s_done << 20));
+
+          if (blockTripleOnVLineTriple)
+          {
+            for (size_t vbl = 0; vbl < 3; vbl++)
+            {
+              if (vbl == vb)
+                continue;
+
+              for (size_t vl = 0; vl < 3; vl++)
+              {
+                const uint32_t triple = pState->x[(vbl * 3 + vl) * 3 + hb];
+                const uint32_t newTriple = triple & invBlockTripleOnVlineTriple;
+
+                changed |= (triple != newTriple);
+
+                pState->x[(vbl * 3 + vl) * 3 + hb] = newTriple;
+              }
+            }
+          }
+        }
+      }
     }
   }
 
